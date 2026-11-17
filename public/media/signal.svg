@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 660">
+<defs><radialGradient id="bg"><stop stop-color="#383553"/><stop offset="1" stop-color="#151522"/></radialGradient><linearGradient id="metal" x1="0" y1="0" x2=".75" y2="1" gradientUnits="objectBoundingBox"><stop stop-color="#34344f"/><stop offset=".28" stop-color="#e9e8ff"/><stop offset=".42" stop-color="#9c96d1"/><stop offset=".60" stop-color="#444363"/><stop offset=".77" stop-color="#c8c3f1"/><stop offset="1" stop-color="#393750"/></linearGradient></defs>
+<path fill="url(#bg)" d="M0 0h960v660H0z"/><path d="M48 48h864v564H48z" stroke="#686581" fill="none"/>
+<g transform="rotate(-20 480 330)"><path fill="url(#metal)" fill-rule="evenodd" d="M183 329c0-109 108-207 247-191 104 11 123 75 213 74 92-1 154 47 154 120 0 104-99 177-213 159-90-14-109-70-195-60-115 15-206-19-206-102zm110-8c0 35 51 42 105 34 80-12 124 37 189 48 51 9 101-19 101-60 0-32-18-42-70-40-101 4-135-70-205-77-66-7-120 43-120 95z"/><path d="M188 335c21-104 119-190 244-174 103 13 132 76 213 74 89-3 143 33 147 92" fill="none" stroke="#efedff" opacity=".55"/></g>
+<g fill="#e9e6ff" font-family="monospace" font-size="18" letter-spacing="2"><text x="75" y="100">SOFT SIGNAL / FORM STUDY</text><text x="75" y="568">DIGITAL OBJECTS</text><text x="832" y="568">02/02</text></g>
+</svg>
