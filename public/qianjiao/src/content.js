@@ -1,9 +1,9 @@
 // Editorial content is separate from the geometry and interaction code.
 export const RESEARCH = {
-  history: { kicker: '一盏灯与莞城的记忆', title: '从宗祠灯火，到城市非遗', description: '东莞传统灯彩，与莞城赵氏的地方记忆相连。八角宫灯的形式，延续着岭南节庆的灯火', insight: '2006 年，灯彩（东莞千角灯）列入第一批国家级非物质文化遗产代表性项目名录', source: '中国非物质文化遗产网', url: 'https://www.ihchina.cn/project_details/14060/' },
-  form: { kicker: '层层展开的空间秩序', title: '不止轮廓，更是一套构成', description: '灯顶、灯体、灯柱、灯带与灯尾。层叠的几何与垂挂的节奏，构成它的识别', insight: '提取层叠、重复与垂挂，重组为六向拼接结构', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
-  craft: { kicker: '材料之间的连接智慧', title: '以手工，把平面变成立体', description: '扎作、书画、剪纸与刺绣，在一盏灯里相遇', insight: '让“如何搭成”变成可以参与的体验', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
-  meaning: { kicker: '灯火里的共同愿望', title: '千角千灯，寄托团聚与兴旺', description: '“角”与“个”、“灯”与“丁”谐音，寄托着人丁兴旺的愿望', insight: '共同完成，让这份记忆进入日常', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
+  history: { kicker: '一盏灯与莞城的记忆', title: '从宗祠灯火到城市非遗', description: '东莞传统灯彩，与莞城赵氏的地方记忆相连。八角宫灯的形式，延续着岭南节庆的灯火', insight: '2006 年，灯彩（东莞千角灯）列入第一批国家级非物质文化遗产代表性项目名录', source: '中国非物质文化遗产网', url: 'https://www.ihchina.cn/project_details/14060/' },
+  form: { kicker: '层层展开的空间秩序', title: '不止轮廓更是一套构成', description: '灯顶、灯体、灯柱、灯带与灯尾。层叠的几何与垂挂的节奏，构成它的识别', insight: '提取层叠、重复与垂挂，重组为六向拼接结构', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
+  craft: { kicker: '材料之间的连接智慧', title: '以手工把平面变成立体', description: '扎作、书画、剪纸与刺绣，在一盏灯里相遇', insight: '让“如何搭成”变成可以参与的体验', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
+  meaning: { kicker: '灯火里的共同愿望', title: '千角千灯寄托团聚与兴旺', description: '“角”与“个”、“灯”与“丁”谐音，寄托着人丁兴旺的愿望', insight: '共同完成，让这份记忆进入日常', source: '新华网 · 昔日宫灯点亮万千百姓家', url: 'https://www.xinhuanet.com/politics/2021-09/19/c_1127881117.htm' },
 };
 
 export const STEPS = [
@@ -72,7 +72,7 @@ export function stageFor(item) {
 }
 
 export const CONCEPTS = {
-  window:{title:'把透光的秩序，拼成桌面屏风',description:'提取几何窗格与重复单元，探索可扩展的亚克力格栅模块',boundary:'设计者核验：纹样来源、模块强度与边缘触感',svg:'<svg viewBox="0 0 140 140"><rect x="14" y="14" width="112" height="112"/><rect x="22" y="22" width="96" height="96"/><path d="M70 22v96M22 70h96M22 46l24-24 48 96 24-24M22 94l24 24 48-96 24 24M22 46l96 48M22 94l96-48"/></svg>'},
-  boat:{title:'把修长的骨架，转成掌上的龙舟',description:'研究船肋、龙骨与外壳的关系，探索沿轴线重复装入的片状结构',boundary:'设计者核验：船体比例、连接顺序与文化使用情境',svg:'<svg viewBox="0 0 140 140"><path d="m9 78 18 23 77 0 27-37-18 11-87 0Z M27 85h88M34 75v25M47 75v25M60 75v25M73 75v25M86 75v25M99 75v25M27 75l-7-21 12 8 6 13M112 75l9-27 10-5-1 21"/><path d="m35 48 22 30m5-30 22 30m5-30 22 30"/></svg>'},
-  lion:{title:'把形态的张力，拆成可叠合的层片',description:'研究醒狮头部的轮廓和层次，探索以平面切片表达立体神态',boundary:'设计者核验：造型语义、地方差异与叠层可装配性',svg:'<svg viewBox="0 0 140 140"><path d="M25 105 17 76 23 45 42 24 70 15 98 24 117 45 123 76 115 105 92 121H48Z"/><path d="M34 99 28 73 34 49 49 32 70 25 91 32 106 49 112 73 106 99 86 111H54Z"/><circle cx="46" cy="61" r="15"/><circle cx="94" cy="61" r="15"/><circle cx="46" cy="61" r="6"/><circle cx="94" cy="61" r="6"/><path d="m61 73 9-7 9 7-9 8ZM42 93l13-7h30l13 7-12 10H54ZM70 27v20"/></svg>'},
+  window:{title:'把透光的秩序拼成桌面屏风',description:'提取几何窗格与重复单元，探索可扩展的亚克力格栅模块',boundary:'设计者核验：纹样来源、模块强度与边缘触感',svg:'<svg viewBox="0 0 140 140"><rect x="14" y="14" width="112" height="112"/><rect x="22" y="22" width="96" height="96"/><path d="M70 22v96M22 70h96M22 46l24-24 48 96 24-24M22 94l24 24 48-96 24 24M22 46l96 48M22 94l96-48"/></svg>'},
+  boat:{title:'把修长的骨架转成掌上的龙舟',description:'研究船肋、龙骨与外壳的关系，探索沿轴线重复装入的片状结构',boundary:'设计者核验：船体比例、连接顺序与文化使用情境',svg:'<svg viewBox="0 0 140 140"><path d="m9 78 18 23 77 0 27-37-18 11-87 0Z M27 85h88M34 75v25M47 75v25M60 75v25M73 75v25M86 75v25M99 75v25M27 75l-7-21 12 8 6 13M112 75l9-27 10-5-1 21"/><path d="m35 48 22 30m5-30 22 30m5-30 22 30"/></svg>'},
+  lion:{title:'把形态的张力拆成可叠合的层片',description:'研究醒狮头部的轮廓和层次，探索以平面切片表达立体神态',boundary:'设计者核验：造型语义、地方差异与叠层可装配性',svg:'<svg viewBox="0 0 140 140"><path d="M25 105 17 76 23 45 42 24 70 15 98 24 117 45 123 76 115 105 92 121H48Z"/><path d="M34 99 28 73 34 49 49 32 70 25 91 32 106 49 112 73 106 99 86 111H54Z"/><circle cx="46" cy="61" r="15"/><circle cx="94" cy="61" r="15"/><circle cx="46" cy="61" r="6"/><circle cx="94" cy="61" r="6"/><path d="m61 73 9-7 9 7-9 8ZM42 93l13-7h30l13 7-12 10H54ZM70 27v20"/></svg>'},
 };

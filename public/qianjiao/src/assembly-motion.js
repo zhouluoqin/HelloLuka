@@ -1,12 +1,11 @@
 import * as THREE from '../vendor/three.module.js';
-import { matrixFor, geometryFor } from './geometry.js';
+import { matrixFor } from './geometry.js';
 
 const clamp=THREE.MathUtils.clamp;
 const smooth=t=>t*t*(3-2*t);
 const vec=a=>new THREE.Vector3(...a);
 
-// All unfinished parts remain on their original 1:1 cutting sheets.
-// The animation first lifts and turns each plate, then performs a straight insertion.
+// Each plate lifts from its resting pose, turns, and then slides straight into its slot.
 export class AssemblyMotion {
   constructor(view) {
     this.view=view;this.data=view.data;this.follow=true;this.userPaused=false;this.activeStage=-1;
@@ -14,42 +13,13 @@ export class AssemblyMotion {
     for(const mesh of view.meshes){
       const d=mesh.userData,item=d.item;
       this.actors.set(item.code+'-'+item.index,mesh);
-      d.assembledQuaternion=mesh.quaternion.clone();
       if(['A3','A4'].includes(item.code))d.entry.set(0,0,40);
       d.insertOffset=d.entry.clone().normalize().multiplyScalar(22);
       d.insertStart=d.base.clone().add(d.insertOffset);
       [d.phaseStart,d.phaseEnd]=this.window(mesh);
-      const flat=this.flatMatrix(item);
-      flat.decompose(d.flatPosition=new THREE.Vector3(),d.flatQuaternion=new THREE.Quaternion(),new THREE.Vector3());
     }
-    this.trays=new THREE.Group();view.root.add(this.trays);
-    const material=new THREE.MeshBasicMaterial({color:0xe7bac1,transparent:true,opacity:.28,side:THREE.DoubleSide,depthWrite:false});
-    const lineMaterial=new THREE.LineBasicMaterial({color:0xc98998,transparent:true,opacity:.42});
-    for(let i=0;i<3;i++){
-      const g=new THREE.PlaneGeometry(400,300),p=new THREE.Mesh(g,material);p.position.set((i-1)*424,-310,-93);this.trays.add(p);
-      const border=new THREE.LineSegments(new THREE.EdgesGeometry(g),lineMaterial);border.position.copy(p.position);this.trays.add(border);
-    }
-    // Spare pins stay on the trays; they are not counted as installed pieces.
-    for(const sheet of this.data.sheets)for(const item of sheet.items)if(!this.actors.has(item.code+'-'+item.index)){
-      const mesh=new THREE.Mesh(geometryFor(this.data.parts[item.code]),view.materialFor(item.code));mesh.applyMatrix4(this.flatMatrix(item));this.trays.add(mesh);
-    }
-    this.guides=new THREE.Group();view.root.add(this.guides);
+    this.guides=new THREE.Group();this.guides.visible=false;view.root.add(this.guides);
     this.lineMaterial=new THREE.LineBasicMaterial({color:0xb72e4b,transparent:true,opacity:.9,depthTest:false});
-    view.camera.far=7000;view.camera.updateProjectionMatrix();view.controls.maxDistance=6200;view.controls.minDistance=55;
-    this.update(0);this.camera(1,true);
-  }
-
-  flatMatrix(item) {
-    let found,sheetIndex;
-    for(let s=0;s<this.data.sheets.length;s++){found=this.data.sheets[s].items.find(i=>i.code===item.code&&i.index===item.index);if(found){sheetIndex=s;break;}}
-    if(!found)throw new Error('Missing cutting position for '+item.code+'-'+item.index);
-    const p=this.data.parts[item.code],[minX,minY]=p.bounds,baseX=(sheetIndex-1)*424-200,baseY=-460;
-    const sign=matrixFor(this.data.scene.find(i=>i.code===item.code)??{...item,u:[1,0,0],v:[0,1,0],normal:[0,0,1],origin:[0,0,0]}).determinant()<0?-1:1;
-    const u=found.turned?new THREE.Vector3(0,1,0):new THREE.Vector3(1,0,0);
-    const v=found.turned?new THREE.Vector3(-1,0,0):new THREE.Vector3(0,1,0);
-    const x=found.turned?baseX+found.x+p.height+minY:baseX+found.x-minX;
-    const y=found.turned?baseY+found.y-minX:baseY+found.y-minY;
-    return new THREE.Matrix4().makeBasis(u,v,new THREE.Vector3(0,0,sign)).setPosition(x,y,-90);
   }
 
   window(mesh) {
@@ -70,7 +40,6 @@ export class AssemblyMotion {
 
   update(progress,resetPositions=false) {
     this.progress=progress;
-    this.trays.visible=progress<9.92&&!this.view.explosionTarget;
     const stage=progress===0?0:Math.min(10,Math.ceil(progress));
     if(stage!==this.activeStage){this.activeStage=stage;this.userPaused=false;this.buildGuides(stage);}
     let placed=0;
@@ -102,12 +71,10 @@ export class AssemblyMotion {
       const mates={1:[['A2',2]],2:[['A2',2]],3:[['A4',1]],4:[['B1',1]],5:[['B2',1],['B2',6],['B3',6]],6:[['B5',6]],7:[['C1',1]],8:[['C6',6]],9:[['S3',1]]}[stage]??[];
       for(const pair of mates){const mate=this.actors.get(pair.join('-'));if(mate&&mate.userData.motionPhase===1){mate.material=this.view.materials.selected;mate.userData.edge.material=this.view.selectedEdgeMaterial;mate.userData.edge.visible=true;}}
     }
-    if(placed!==this.placed){this.placed=placed;this.view.element.dataset.placed=String(placed);}
+    this.view.element.dataset.placed=String(placed);
     this.view.element.dataset.visiblePieces=String(this.view.meshes.length);
-    this.view.cords.visible=progress>=9.98;
-    if(this.view.lamp){
-      const t=smooth(clamp(progress-2,0,1));this.view.lamp.position.set(575*(1-t),-175*(1-t),-72+125*t);this.view.lamp.rotation.y=(1-t)*Math.PI/2;this.view.setLamp(this.lampOverride??progress>=9.98);
-    }
+    this.view.scatter.updateShadows(progress<10);
+    this.view.setAccessories(progress===10);
     this.guides.visible=stage>0&&progress-stage+1>.25&&progress-stage+1<.92;
     if(this.guides.visible&&this.pathLine){
       const sample=this.exemplar(stage,stagePhase);
@@ -147,7 +114,9 @@ export class AssemblyMotion {
     const stage=this.activeStage,phase=this.progress-stage+1;
     let target,direction,distance;
     const aspect=this.view.camera.aspect||1;
-    if(stage===0){target=new THREE.Vector3(0,-155,300);direction=new THREE.Vector3(.02,1.35,1);distance=Math.max(1100,1248/(2*Math.tan(THREE.MathUtils.degToRad(this.view.camera.fov)/2)*aspect)*1.12);}
+    if(stage===0){
+      ({target,direction,distance}=this.view.scatter.cameraPose(1));
+    }
     else {
       const sample=this.exemplar(stage,phase),d=sample?.userData;
       const joints={1:[59,0,5],2:[43,-25,4],3:[59,0,101],4:[23,-38,119],5:[47.7,-27.5,133],6:[47.7,-27.5,134],7:[24,-28,158],8:[39.7,-22.9,171],9:[10,0,194],10:[95,0,108]};
@@ -162,19 +131,19 @@ export class AssemblyMotion {
         if(local<.35)direction.set(.2,1.4,1);
       }else target=joint;
       if(phase>.91){const t=smooth((phase-.91)/.09);target.lerp(new THREE.Vector3(0,20,0),t);distance=THREE.MathUtils.lerp(distance,590,t);direction.lerp(new THREE.Vector3(.68,.3,1),t);}
-      if(this.progress===10){target=new THREE.Vector3(0,10,0);direction=new THREE.Vector3(.68,.3,1);distance=620;}
       // Portrait screens keep the current joint within the narrower horizontal field.
       if(aspect<1)distance/=Math.max(aspect,.55);
+      if(this.progress<.24){
+        const ready=this.view.scatter.cameraPose(1),t=smooth(this.progress/.24);
+        target.lerp(ready.target,1-t);
+        direction.lerp(ready.direction,1-t);
+        distance=THREE.MathUtils.lerp(ready.distance,distance,t);
+      }
+      if(this.progress===10)({target,direction,distance}=this.view.scatter.cameraPose(0));
     }
-    const {camera,controls,element}=this.view;
-    distance=clamp(distance,controls.minDistance,controls.maxDistance);
-    const position=target.clone().addScaledVector(direction.normalize(),distance);
-    const settled=camera.position.distanceToSquared(position)<.01&&controls.target.distanceToSquared(target)<.01;
-    const alpha=immediate||settled?1:1-Math.exp(-dt*4.2);
-    camera.position.lerp(position,alpha);controls.target.lerp(target,alpha);
-    const shot=stage===0?'flat-sheets':phase>.91?'assembled':'joint-'+stage;
-    if(element.dataset.cameraShot!==shot)element.dataset.cameraShot=shot;
-    return !immediate&&!settled;
+    const shot=stage===0?'scattered-parts':phase>.91?'assembled':'joint-'+stage;
+    this.view.element.dataset.cameraShot=shot;
+    return this.view.moveCamera({target,direction,distance},dt,immediate);
   }
 
   setFollow(active){this.follow=active;this.userPaused=false;}

@@ -1,12 +1,13 @@
 import * as THREE from '../vendor/three.module.js';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import { geometryFor, matrixFor } from './geometry.js';
-import { stageFor } from './content.js';
-import { AssemblyMotion } from './assembly-motion.js?v=2';
+import { stageFor } from './content.js?v=3';
+import { AssemblyMotion } from './assembly-motion.js?v=3';
+import { ScatterMotion } from './scatter-motion.js?v=3';
+import { Suspension } from './suspension.js?v=3';
 
 const views=new Set(), edgeCache=new Map();
 const clamp=THREE.MathUtils.clamp;
-const ease=t=>1-(1-t)**3;
 const coarsePointer=matchMedia('(pointer: coarse)');
 let scheduledFrame=0;
 let studioReflection;
@@ -67,9 +68,10 @@ function edgesFor(code,geometry) {
 }
 
 export class ObjectViewer {
-  constructor(element,data,{kind='product',onSelect=()=>{},onRotateChange=()=>{},onError=()=>{}}={}) {
+  constructor(element,data,{kind='assembly',onSelect=()=>{},onRotateChange=()=>{},onError=()=>{}}={}) {
     this.element=element;this.data=data;this.kind=kind;this.onSelect=onSelect;this.onRotateChange=onRotateChange;this.onError=onError;
-    this.meshes=[];this.visible=true;this.failed=false;this.progress=0;this.explosion=0;this.explosionTarget=0;this.bay=0;this.xray=false;this.lampEnabled=true;
+    this.meshes=[];this.visible=true;this.active=true;this.inViewport=true;this.failed=false;
+    this.progress=0;this.explosionTarget=false;this.xray=false;this.lampEnabled=true;this.scrollLinked=true;
     this.dirty=true;this.animating=false;this.lastFrame=null;this.frameInterval=1000/(coarsePointer.matches?30:60);
     this.renderer=new THREE.WebGLRenderer({antialias:!coarsePointer.matches,alpha:true,powerPreference:coarsePointer.matches?'low-power':'high-performance'});
     this.renderer.setClearColor(0x000000,0);
@@ -78,13 +80,13 @@ export class ObjectViewer {
     const canvas=this.renderer.domElement;
     canvas.setAttribute('aria-hidden','true');element.append(canvas);
     this.scene=new THREE.Scene();
-    this.camera=new THREE.PerspectiveCamera(kind==='part'?32:33,1,.3,2500);
+    this.camera=new THREE.PerspectiveCamera(kind==='part'?32:33,1,.3,kind==='part'?2500:7000);
     this.controls=new OrbitControls(this.camera,canvas);
     // OrbitControls sets an inline touch-action; the viewport CSS owns gesture policy.
     canvas.style.removeProperty('touch-action');
-    this.controls.enableZoom=kind!=='hero';
+    this.controls.enableZoom=kind==='part';
     this.controls.enableDamping=true;this.controls.dampingFactor=coarsePointer.matches?.15:.1;this.controls.enablePan=false;
-    this.controls.minDistance=12;this.controls.maxDistance=1450;this.controls.zoomSpeed=.8;
+    this.controls.minDistance=kind==='part'?12:50;this.controls.maxDistance=kind==='part'?1450:6200;this.controls.zoomSpeed=.8;
     this.controls.autoRotateSpeed=.55;
     this.controls.addEventListener('change',()=>this.invalidate());
     this.root=new THREE.Group();this.root.rotation.x=-Math.PI/2;this.root.position.y=-85;this.scene.add(this.root);
@@ -96,28 +98,22 @@ export class ObjectViewer {
     this.makeMaterials();
     if(kind==='part')this.setPart('A3');
     else {
-      let sceneItems=data.scene;
-      if(kind==='bay') {
-        sceneItems=sceneItems.filter(i=>(i.code==='B2'&&[1,2].includes(i.index))||(['B3','B5','B4'].includes(i.code)&&i.index===1));
-        const a=Math.PI/6;
-        sceneItems=[{code:'T9',index:1,origin:[0,0,119],u:[-Math.sin(a),Math.cos(a),0],v:[Math.cos(a),Math.sin(a),0],normal:[0,0,1],module:'B'},...sceneItems];
-      }
-      sceneItems.forEach(item=>this.addPart(item));
-      if(kind!=='bay'){this.makeCords();this.makeLamp();}
+      data.scene.forEach(item=>this.addPart(item));
+      this.makeCords();this.makeLamp();
       this.root.updateMatrixWorld(true);this.resize();
-      if(kind==='assembly'){this.motion=new AssemblyMotion(this);this.setProgress(0);}else this.fit();
-      if(kind==='bay')this.setBay(0,true);
+      this.scatter=new ScatterMotion(this);
+      this.motion=new AssemblyMotion(this);
+      this.setStoryPose('hero');
     }
     this.resizeObserver=new ResizeObserver(()=>this.resize());this.resizeObserver.observe(element);
     this.intersectionObserver=new IntersectionObserver(([entry])=>{
-      this.visible=entry.isIntersecting;
-      this.lastFrame=null;
-      if(this.visible)this.invalidate();
+      this.inViewport=entry.isIntersecting;
+      this.setActive(this.active);
     });
     this.intersectionObserver.observe(element);
     this.bindPointer(canvas);
     element.addEventListener('keydown',e=>this.onKey(e));
-    canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.fail('三维显示暂时中断，可刷新页面重新加载。');});
+    canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.fail('三维显示暂时中断，可刷新页面重新加载');});
     element.dataset.pieces=String(this.meshes.length);
     views.add(this);this.resize();this.invalidate();
   }
@@ -127,23 +123,53 @@ export class ObjectViewer {
     if(this.visible&&!this.failed)scheduleRender();
   }
 
-  setScrollPose(progress) {
-    if(progress===this.scrollPose)return;
-    this.scrollPose=progress;
-    this.root.rotation.z=progress*1.8;
-    this.root.rotation.x=-Math.PI/2+progress*.065;
-    this.root.scale.setScalar(1+progress*.13);
-    this.element.dataset.scrollPose=progress.toFixed(3);
-    this.invalidate();
+  setActive(active) {
+    this.active=active;
+    const visible=active&&this.inViewport;
+    if(this.visible===visible)return;
+    this.visible=visible;
+    this.lastFrame=null;
+    if(visible)this.invalidate();
+  }
+
+  setStoryPose(scene,{yaw=0,tilt=0,spread=0}={}) {
+    const entering=scene!==this.storyScene;
+    const oldSpread=this.spread;
+    const first=!this.storyScene;
+    this.storyScene=scene;
+    this.spread=spread;
+    this.root.rotation.set(-Math.PI/2+tilt,0,yaw);
+    if(entering){
+      this.storyCameraPaused=false;
+      this.motion.userPaused=false;
+      this.controls.enableZoom=scene==='assembly'&&!this.scrollLinked;
+    }
+    if(scene==='assembly'){
+      if(entering)this.updateTransforms(true);
+      return;
+    }
+    this.motion.guides.visible=false;
+    if(entering||scene==='scatter'&&oldSpread!==spread){
+      this.scatter.setPose(spread);
+      this.applyStyles();
+      this.setAccessories(scene==='hero'||spread===0);
+      this.element.dataset.visiblePieces=String(this.meshes.length);
+      this.element.dataset.placed=String(spread===0?this.meshes.length:0);
+      if(scene==='scatter')this.storyCameraPaused=false;
+    }
+    this.element.dataset.cameraShot=scene==='hero'?'lantern':spread===1?'scattered-parts':'falling-parts';
+    if(first)this.moveCamera(this.scatter.cameraPose(0),1,true);
   }
 
   setScrollLinked(active) {
-    this.controls.enableZoom=!active;
+    this.scrollLinked=active;
+    this.controls.enableZoom=this.storyScene==='assembly'&&!active;
     this.element.dataset.scrollLinked=String(active);
   }
 
   pauseForOrbit() {
-    if(this.motion)this.motion.userPaused=true;
+    if(this.storyScene==='assembly')this.motion.userPaused=true;
+    else this.storyCameraPaused=true;
     if(this.controls.autoRotate){
       this.setRotate(false);
       this.onRotateChange(false);
@@ -151,8 +177,8 @@ export class ObjectViewer {
   }
 
   bindPointer(canvas) {
-    const canSelect=this.kind==='assembly'||this.kind==='bay';
-    const hasTooltip=this.kind==='bay'||this.kind==='part';
+    const canSelect=this.kind==='assembly';
+    const hasTooltip=this.kind==='part';
     let down=null,tooltip,lastHover=0;
     if(canSelect||hasTooltip){
       this.raycaster=new THREE.Raycaster();
@@ -200,7 +226,7 @@ export class ObjectViewer {
     canvas.addEventListener('pointerup',event=>{
       const isTap=down&&event.button===0&&Math.hypot(event.clientX-down.x,event.clientY-down.y)<=7;
       down=null;
-      if(!canSelect||!isTap)return;
+      if(!canSelect||this.storyScene==='hero'||!isTap)return;
       const hit=this.hit(event),item=hit?.userData.item;
       if(item&&this.data.production_codes.includes(item.code)){
         this.select(item.code,item.index);
@@ -227,7 +253,6 @@ export class ObjectViewer {
       tile:new THREE.MeshPhysicalMaterial({...base,opacity:.45}),
       rail:new THREE.MeshPhysicalMaterial({...base,opacity:.62}),
       key:new THREE.MeshPhysicalMaterial({...base,opacity:.56}),
-      trial:new THREE.MeshPhysicalMaterial({...base,color:0xfff1f6,opacity:.46}),
       xray:new THREE.MeshBasicMaterial({color:0xc9657d,transparent:true,opacity:.15,side:THREE.DoubleSide,depthWrite:false}),
       selected:new THREE.MeshPhysicalMaterial({...base,color:0xb53d59,vertexColors:false,opacity:.87}),
       moving:new THREE.MeshPhysicalMaterial({...base,color:0xdb688d,vertexColors:false,opacity:.69}),
@@ -242,7 +267,6 @@ export class ObjectViewer {
     if(code==='B4'||code==='C4')return this.materials.tile;
     if(code==='B5'||code==='C6')return this.materials.rail;
     if(code.startsWith('K'))return this.materials.key;
-    if(code==='T9')return this.materials.trial;
     return this.materials.shell;
   }
 
@@ -261,9 +285,9 @@ export class ObjectViewer {
     const spread=(item.code.startsWith('K')?88:['A1','A2','B1','C1'].includes(item.code)?12:48);
     const exploded=radial.clone().multiplyScalar(spread).add(new THREE.Vector3(0,0,(stage-4)*24));
     const edge=new THREE.LineSegments(edgesFor(item.code,geometry),this.edgeMaterial);mesh.add(edge);
-    edge.visible=['bay','part'].includes(this.kind);
+    edge.visible=this.kind==='part';
     mesh.name=`${item.code}-${String(item.index).padStart(2,'0')}`;
-    mesh.userData={item,base,entry,exploded,stage,edge,baseMaterial:mesh.material};
+    mesh.userData={item,base,entry,exploded,stage,edge,baseMaterial:mesh.material,assembledQuaternion:mesh.quaternion.clone()};
     this.root.add(mesh);this.meshes.push(mesh);return mesh;
   }
 
@@ -273,8 +297,8 @@ export class ObjectViewer {
     const cord=(points,r)=>{const curve=new THREE.CurvePath();for(let i=1;i<points.length;i++)curve.add(new THREE.LineCurve3(new THREE.Vector3(...points[i-1]),new THREE.Vector3(...points[i])));this.cords.add(new THREE.Mesh(new THREE.TubeGeometry(curve,Math.max(4,points.length*3),r,5,false),mat));};
     for(const a of this.data.rope_angles)cord([[22*Math.cos(a),22*Math.sin(a),98],[22*Math.cos(a),22*Math.sin(a),200],[0,0,221]],.32);
     cord([[0,0,221],[0,0,245]],.45);
-    for(let i=0;i<6;i++){const a=i*Math.PI/3;cord([[95*Math.cos(a),95*Math.sin(a),128],[95*Math.cos(a),95*Math.sin(a),108]],.21);}
-    for(const x of [-18,18])cord([[x,0,0],[0,0,-11],[0,0,-26]],.17);
+    for(const x of [-18,18])cord([[x,0,0],[0,0,-11]],.17);
+    this.suspension=new Suspension(this,this.cords,mat);
   }
 
   makeLamp() {
@@ -298,39 +322,39 @@ export class ObjectViewer {
     this.invalidate();
   }
 
+  setAccessories(active) {
+    if(this.accessories===active)return;
+    this.accessories=active;
+    this.cords.visible=active;
+    this.lamp.visible=active;
+    if(active)this.suspension.reset();
+  }
+
   setProgress(value) {
     this.progress=clamp(value,0,10);this.element.dataset.step=this.progress.toFixed(2);
-    this.updateTransforms();
+    if(this.storyScene==='assembly')this.updateTransforms();
     this.invalidate();
   }
 
   updateTransforms(resetPositions=false) {
-    if(this.kind==='part')return;
-    if(this.kind==='assembly'&&!this.explosionTarget&&this.explosion<.001){this.motion?.update(this.progress,resetPositions);return;}
-    if(this.kind==='bay') {
-      const tile=this.meshes.find(m=>m.userData.item.code==='B4'),rail=this.meshes.find(m=>m.userData.item.code==='B5');
-      tile.visible=this.bay>0;tile.position.copy(tile.userData.base).addScaledVector(this.bayDirection,this.bayTileOffset||0);
-      rail.position.copy(rail.userData.base).addScaledVector(this.bayDirection,this.bayRailOffset||0);return;
-    }
-    let placed=0;
-    const grouped={};for(const mesh of this.meshes){const stage=mesh.userData.stage;(grouped[stage]??=[]).push(mesh);}
+    if(!this.explosionTarget){this.motion.update(this.progress,resetPositions);return;}
+    this.scatter.updateShadows(false);
+    this.motion.guides.visible=false;
+    this.setAccessories(false);
     for(const mesh of this.meshes){
-      const {base,entry,exploded,stage}=mesh.userData;
-      if(this.kind==='assembly')mesh.quaternion.copy(mesh.userData.assembledQuaternion);
-      let phase=this.kind==='assembly'?clamp(this.progress-stage+1,0,1):1;
-      if(phase>0&&phase<1){const siblings=grouped[stage];phase=clamp(phase*1.25-(siblings.indexOf(mesh)/siblings.length)*.23,0,1);}
-      mesh.visible=phase>0;
-      mesh.position.copy(base).addScaledVector(entry,1-ease(phase)).addScaledVector(exploded,this.explosion);
-      if(phase>=.995)placed++;
+      const {base,exploded,assembledQuaternion}=mesh.userData;
+      mesh.position.copy(base).add(exploded);
+      mesh.quaternion.copy(assembledQuaternion);
     }
-    if(this.cords)this.cords.visible=(this.kind!=='assembly'||this.progress>=9.99)&&this.explosion<.08;
-    this.element.dataset.placed=String(placed);
   }
 
   setExplosion(active) {
-    this.explosionTarget=active?1:0;
-    if(active){this.motion?.trays&&(this.motion.trays.visible=false);this.motion?.guides&&(this.motion.guides.visible=false);this.motion?.update(10);this.progress=10;this.explosion=1;this.updateTransforms();this.fit();}
-    else {this.explosion=0;this.updateTransforms(true);this.motion?.reset();}
+    this.explosionTarget=active;
+    if(this.storyScene==='assembly'){
+      this.updateTransforms(true);
+      if(active)this.fit();
+      else this.motion.reset();
+    }
     this.element.dataset.exploded=String(active);
     this.invalidate();
   }
@@ -339,17 +363,9 @@ export class ObjectViewer {
   select(code,index=1) {this.selected={code,index};this.applyStyles();this.element.dataset.selection=`${code}-${index}`;}
   clearSelection() {this.selected=null;this.applyStyles();delete this.element.dataset.selection;}
   applyStyles() {
-    for(const mesh of this.meshes){const {item,edge,baseMaterial}=mesh.userData;const selected=this.selected?.code===item.code&&this.selected?.index===item.index;mesh.material=selected?this.materials.selected:this.xray?this.materials.xray:baseMaterial;edge.visible=!!(selected||this.xray||['bay','part'].includes(this.kind));edge.material=selected?this.selectedEdgeMaterial:this.xray?this.xrayEdgeMaterial:this.edgeMaterial;}
-    if(this.motion&&!this.explosionTarget)this.motion.update(this.progress);
+    for(const mesh of this.meshes){const {item,edge,baseMaterial}=mesh.userData;const selected=this.selected?.code===item.code&&this.selected?.index===item.index;mesh.material=selected?this.materials.selected:this.xray?this.materials.xray:baseMaterial;edge.visible=!!(selected||this.xray||this.kind==='part');edge.material=selected?this.selectedEdgeMaterial:this.xray?this.xrayEdgeMaterial:this.edgeMaterial;}
+    if(this.storyScene==='assembly'&&!this.explosionTarget)this.motion.update(this.progress);
     this.invalidate();
-  }
-
-  setBay(step,immediate=false) {
-    this.bay=step;
-    this.bayDirection=new THREE.Vector3(...this.data.scene.find(i=>i.code==='B4'&&i.index===1).normal).negate();
-    this.bayTileTarget=step===1?23:0;this.bayRailTarget=step===0?17:0;
-    if(immediate){this.bayTileOffset=this.bayTileTarget;this.bayRailOffset=this.bayRailTarget;}
-    this.element.dataset.bay=String(step);this.updateTransforms();this.invalidate();
   }
 
   setPart(code) {
@@ -370,17 +386,28 @@ export class ObjectViewer {
     if(bounds.isEmpty())return;
     const fov=THREE.MathUtils.degToRad(this.camera.fov),aspect=this.camera.aspect||1;
     const distance=Math.max(size.y,size.x/aspect,size.z*.9)*.5/Math.tan(fov/2)*(this.kind==='part'?1.4:1.24);
-    const direction=this.kind==='part'?new THREE.Vector3(.23,.14,1):this.kind==='bay'?new THREE.Vector3(.5,.7,1):new THREE.Vector3(.62,.25,1);
+    const direction=this.kind==='part'?new THREE.Vector3(.23,.14,1):new THREE.Vector3(.62,.25,1);
     direction.normalize();this.controls.target.copy(center);this.camera.position.copy(center).addScaledVector(direction,Math.max(distance,20));
-    this.controls.minDistance=Math.max(10,distance*.32);this.controls.maxDistance=Math.max(100,distance*2.8);
+    if(this.kind==='part'){
+      this.controls.minDistance=Math.max(10,distance*.32);this.controls.maxDistance=Math.max(100,distance*2.8);
+    }
     this.camera.lookAt(center);this.controls.update();this.savedCamera=this.camera.position.clone();this.savedTarget=center.clone();
   }
 
   reset() {
     this.invalidate();
-    if(this.kind==='assembly'&&this.motion&&!this.explosionTarget){this.motion.reset();return;}
-    if(this.kind==='assembly'&&this.explosionTarget){this.explosion=0;this.updateTransforms();this.fit();return;}
+    if(this.storyScene==='assembly'){if(this.explosionTarget)this.fit();else this.motion.reset();return;}
+    if(this.scatter){this.storyCameraPaused=false;this.moveCamera(this.scatter.cameraPose(this.spread),1,true);return;}
     if(this.savedCamera){this.camera.position.copy(this.savedCamera);this.controls.target.copy(this.savedTarget);this.controls.update();}
+  }
+
+  moveCamera({target,direction,distance},dt,immediate=false) {
+    const {camera,controls}=this;
+    const position=direction.normalize().multiplyScalar(clamp(distance,controls.minDistance,controls.maxDistance)).add(target);
+    const settled=camera.position.distanceToSquared(position)<.01&&controls.target.distanceToSquared(target)<.01;
+    const alpha=immediate||settled?1:1-Math.exp(-dt*5.7);
+    camera.position.lerp(position,alpha);controls.target.lerp(target,alpha);
+    return !immediate&&!settled;
   }
 
   zoom(factor) {
@@ -409,7 +436,7 @@ export class ObjectViewer {
     const old=this.camera.aspect;
     this.camera.aspect=width/height;this.camera.updateProjectionMatrix();
     this.renderer.setDrawingBufferSize(width,height,pixelRatio);
-    if(this.kind==='assembly')this.camera.setViewOffset(width,height,0,Math.min(75,height*.08),width,height);
+    if(this.kind==='assembly')this.camera.setViewOffset(width,height,0,Math.min(88,height*.1),width,height);
     if(this.savedCamera&&(this.kind!=='assembly'||this.explosionTarget)&&Math.abs(old-this.camera.aspect)>.35)this.fit();
     this.invalidate();
   }
@@ -438,22 +465,26 @@ export class ObjectViewer {
 
   frame(dt) {
     const playing=this.onFrame?.(dt);
-    let movingBay=false;
-    if(this.kind==='bay'){
-      movingBay=Math.abs(this.bayTileOffset-this.bayTileTarget)>.05||Math.abs(this.bayRailOffset-this.bayRailTarget)>.05;
-      this.bayTileOffset=movingBay?THREE.MathUtils.damp(this.bayTileOffset,this.bayTileTarget,5,dt):this.bayTileTarget;
-      this.bayRailOffset=movingBay?THREE.MathUtils.damp(this.bayRailOffset,this.bayRailTarget,5,dt):this.bayRailTarget;
-      this.updateTransforms();
-    }
-    const following=this.motion&&!this.explosionTarget&&this.motion.camera(dt);
+    let following=false;
+    if(this.storyScene==='assembly'&&!this.explosionTarget)following=this.motion.camera(dt);
+    if(this.scatter&&this.storyScene!=='assembly'&&!this.storyCameraPaused)following=this.moveCamera(this.scatter.cameraPose(this.spread),dt);
     const rotating=this.controls.update(dt);
+    let swinging=false;
+    if(this.accessories){
+      const yaw=this.root.rotation.z,azimuth=this.controls.getAzimuthalAngle();
+      const manualOrbit=this.controls.autoRotate||(this.storyScene==='assembly'?this.motion.userPaused:this.storyCameraPaused);
+      this.hangingAngle=(this.hangingAngle??0)+yaw-(this.lastYaw??yaw)+(manualOrbit?(this.lastAzimuth??azimuth)-azimuth:0);
+      swinging=this.suspension.step(dt,this.hangingAngle);
+      this.lastYaw=yaw;
+      this.lastAzimuth=azimuth;
+    }
     this.renderer.render(this.scene,this.camera);
     if(!this.ready){
       this.ready=true;
       this.element.classList.add('is-ready');
       this.element.dataset.modelReady='true';
     }
-    return !!(playing||movingBay||following||rotating||this.controls.autoRotate);
+    return !!(playing||following||rotating||swinging||this.controls.autoRotate);
   }
 
   fail(message) {
