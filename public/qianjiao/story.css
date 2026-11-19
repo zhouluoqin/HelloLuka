@@ -57,6 +57,19 @@
   pointer-events: none;
 }
 
+.editorial-turn-area {
+  display: none;
+}
+
+.lantern-story[data-turn-right="true"] .editorial-turn-area {
+  display: block;
+  position: absolute;
+  z-index: 3;
+  inset: var(--story-header) 0 0 max(0px, calc(54vw - var(--story-x, 0px)));
+  pointer-events: auto;
+  touch-action: pan-y pinch-zoom;
+}
+
 .lantern-story[data-scene="hidden"] .story-visual {
   visibility: hidden;
 }
@@ -82,12 +95,26 @@
 }
 
 .hero-wordmark {
+  display: flex;
+  color: #b52b4b;
   font-family: var(--sans);
-  font-size: clamp(100px, 25vw, 410px);
+  font-size: clamp(112px, min(33vw, 63svh), 570px);
   font-weight: 700;
   letter-spacing: -.045em;
-  -webkit-text-stroke: clamp(1px, .22vw, 4px) #302129;
+  -webkit-text-stroke: clamp(1px, .22vw, 4px) currentColor;
   opacity: var(--hero-type-opacity, 1);
+}
+
+.hero-wordmark span:first-child {
+  transform: translateX(calc(-1 * var(--hero-spread, 0vw)));
+}
+
+.hero-wordmark span:nth-child(2) {
+  transform: translateX(calc(-.38 * var(--hero-spread, 0vw)));
+}
+
+.hero-wordmark span:last-child {
+  transform: translateX(var(--hero-spread, 0vw));
 }
 
 .parts, .product-experience {
@@ -338,7 +365,7 @@
 
 @media (max-width: 640px) {
   .hero-wordmark {
-    font-size: 34vw;
+    font-size: min(41vw, 63svh);
   }
 
   .parts {

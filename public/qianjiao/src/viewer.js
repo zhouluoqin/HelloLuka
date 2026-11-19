@@ -72,6 +72,7 @@ export class ObjectViewer {
     this.element=element;this.data=data;this.kind=kind;this.onSelect=onSelect;this.onRotateChange=onRotateChange;this.onError=onError;
     this.meshes=[];this.visible=true;this.active=true;this.inViewport=true;this.failed=false;
     this.progress=0;this.explosionTarget=false;this.xray=false;this.lampEnabled=true;this.scrollLinked=true;
+    this.manualYaw=0;
     this.dirty=true;this.animating=false;this.lastFrame=null;this.frameInterval=1000/(coarsePointer.matches?30:60);
     this.renderer=new THREE.WebGLRenderer({antialias:!coarsePointer.matches,alpha:true,powerPreference:coarsePointer.matches?'low-power':'high-performance'});
     this.renderer.setClearColor(0x000000,0);
@@ -112,6 +113,7 @@ export class ObjectViewer {
     });
     this.intersectionObserver.observe(element);
     this.bindPointer(canvas);
+    if(kind==='assembly')this.bindLanternTurn();
     element.addEventListener('keydown',e=>this.onKey(e));
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.fail('三维显示暂时中断，可刷新页面重新加载');});
     element.dataset.pieces=String(this.meshes.length);
@@ -132,16 +134,19 @@ export class ObjectViewer {
     if(visible)this.invalidate();
   }
 
-  setStoryPose(scene,{yaw=0,tilt=0,spread=0}={}) {
+  setStoryPose(scene,{yaw=0,tilt=0,spread=0,turnWeight=1}={}) {
     const entering=scene!==this.storyScene;
     const oldSpread=this.spread;
     const first=!this.storyScene;
     this.storyScene=scene;
     this.spread=spread;
-    this.root.rotation.set(-Math.PI/2+tilt,0,yaw);
+    this.storyYaw=yaw;
+    this.turnWeight=scene==='hero'?turnWeight:0;
+    this.root.rotation.set(-Math.PI/2+tilt,0,yaw+this.manualYaw*this.turnWeight);
     if(entering){
       this.storyCameraPaused=false;
       this.motion.userPaused=false;
+      this.controls.enabled=scene!=='hero';
       this.controls.enableZoom=scene==='assembly'&&!this.scrollLinked;
     }
     if(scene==='assembly'){
@@ -159,6 +164,37 @@ export class ObjectViewer {
     }
     this.element.dataset.cameraShot=scene==='hero'?'lantern':spread===1?'scattered-parts':'falling-parts';
     if(first)this.moveCamera(this.scatter.cameraPose(0),1,true);
+  }
+
+  turnLantern(delta) {
+    this.manualYaw=THREE.MathUtils.euclideanModulo(this.manualYaw+delta+Math.PI,Math.PI*2)-Math.PI;
+    // The top cord lies on the lantern's local Z axis, so yaw keeps its attachment point fixed.
+    this.root.rotation.z=this.storyYaw+this.manualYaw*this.turnWeight;
+    this.invalidate();
+  }
+
+  bindLanternTurn() {
+    const area=this.element;
+    let pointer=null;
+    area.addEventListener('pointerdown',event=>{
+      if(this.storyScene!=='hero'||event.button!==0||!event.isPrimary)return;
+      pointer={id:event.pointerId,startX:event.clientX,startY:event.clientY,lastX:event.clientX,turning:false};
+      area.setPointerCapture(event.pointerId);
+    });
+    area.addEventListener('pointermove',event=>{
+      if(this.storyScene!=='hero'||pointer?.id!==event.pointerId)return;
+      if(!pointer.turning){
+        const dx=Math.abs(event.clientX-pointer.startX),dy=Math.abs(event.clientY-pointer.startY);
+        if(dx<5||dx<=dy)return;
+        pointer.turning=true;
+      }
+      this.turnLantern((event.clientX-pointer.lastX)*.012);
+      pointer.lastX=event.clientX;
+    });
+    const endTurn=event=>{if(pointer?.id===event.pointerId)pointer=null;};
+    area.addEventListener('pointerup',endTurn);
+    area.addEventListener('pointercancel',endTurn);
+    area.addEventListener('lostpointercapture',endTurn);
   }
 
   setScrollLinked(active) {
@@ -191,6 +227,7 @@ export class ObjectViewer {
       this.element.append(tooltip);
     }
     canvas.addEventListener('pointerdown',event=>{
+      if(this.storyScene==='hero')return;
       if(!event.isPrimary){
         down=null;
         if(this.controls.enableZoom)this.pauseForOrbit();
@@ -200,6 +237,7 @@ export class ObjectViewer {
       if(tooltip)tooltip.hidden=true;
     });
     canvas.addEventListener('pointermove',event=>{
+      if(this.storyScene==='hero')return;
       if(down){
         const dx=Math.abs(event.clientX-down.x),dy=Math.abs(event.clientY-down.y);
         const singleTouchScroll=event.pointerType==='touch'&&!document.fullscreenElement?.contains(canvas);
@@ -448,6 +486,12 @@ export class ObjectViewer {
   }
 
   onKey(e) {
+    if(this.storyScene==='hero'){
+      if(!['ArrowLeft','ArrowRight','0'].includes(e.key))return;
+      e.preventDefault();
+      this.turnLantern(e.key==='0'?-this.manualYaw:e.key==='ArrowLeft'?-.17:.17);
+      return;
+    }
     if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-','0'].includes(e.key))return;
     e.preventDefault();this.pauseForOrbit();
     if(e.key==='+'||e.key==='=')return this.zoom(1.13);

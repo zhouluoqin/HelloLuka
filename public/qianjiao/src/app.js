@@ -1,6 +1,6 @@
 import { RESEARCH, STEPS, PART_GROUPS, PART_ORDER, PART_DESCRIPTIONS, CONCEPTS, stageFor } from './content.js?v=3';
 import { partSvg } from './geometry.js';
-import { ObjectViewer } from './viewer.js?v=3';
+import { ObjectViewer } from './viewer.js?v=4';
 
 const $=selector=>document.querySelector(selector);
 const $$=selector=>[...document.querySelectorAll(selector)];
@@ -327,8 +327,8 @@ async function main() {
   const cap=value=>Math.max(0,Math.min(1,value));
   const smooth=value=>value*value*(3-2*value);
   const labels={
-    hero:'千角灯三维成品，拖动旋转',
-    editorial:'千角灯三维成品',
+    hero:'悬挂的千角灯，水平拖动或按左右方向键旋转',
+    editorial:'悬挂的千角灯',
     scatter:'散落的三维板件，点选可查看独立模型',
     assembly:'千角灯三维拼装，拖动旋转，点选可查看独立板件',
   };
@@ -344,7 +344,7 @@ async function main() {
     const dock=desktop.matches&&!reducedMotion;
     const departure=reducedMotion?0:smooth(cap(-heroRect.top/Math.max(1,heroRect.height-height)));
     const approach=smooth(cap(1-partsRect.top/(height*.77)));
-    let display='hero',scene='hero',opacity=1,shift=0,yaw=0,tilt=0,spread=0;
+    let display='hero',scene='hero',opacity=1,shift=0,yaw=0,tilt=0,spread=0,turnWeight=0;
     let nextProgress=progress;
 
     if(fullscreen||productRect.top<=1&&productRect.bottom>0){
@@ -358,7 +358,8 @@ async function main() {
     } else {
       shift=dock?departure*(1-approach)*24.5:0;
       yaw=departure*(1-approach)*(dock?1.66:1.08);
-      tilt=departure*(1-approach)*.07;
+      tilt=Math.sin(departure*Math.PI)*(1-approach)*.045;
+      turnWeight=1-approach;
       if(heroRect.bottom<=0)display='editorial';
       if(!dock){
         opacity=Math.max(smooth(cap(heroRect.bottom/(height*.54))),approach);
@@ -366,14 +367,17 @@ async function main() {
       }
     }
 
-    if(story.dataset.scene!==display){
+    const turnRight=display==='editorial'&&dock&&approach===0;
+    if(story.dataset.scene!==display||story.dataset.turnRight!==String(turnRight)){
       story.dataset.scene=display;
-      viewport.tabIndex=['hero','scatter','assembly'].includes(display)?0:-1;
-      if(labels[display])viewport.setAttribute('aria-label',labels[display]);
+      story.dataset.turnRight=String(turnRight);
+      viewport.tabIndex=display==='hero'||display==='scatter'||display==='assembly'||turnRight?0:-1;
+      if(labels[display])viewport.setAttribute('aria-label',turnRight?labels.hero:labels[display]);
     }
     visual.style.setProperty('--story-x',shift.toFixed(3)+'vw');
     visual.style.setProperty('--story-opacity',opacity.toFixed(3));
-    hero.style.setProperty('--hero-type-opacity',String(1-departure*.78));
+    hero.style.setProperty('--hero-spread',(departure*35).toFixed(3)+'vw');
+    hero.style.setProperty('--hero-type-opacity',String(1-smooth(cap((departure-.5)*2))));
 
     const view=viewers.get('assembly');
     if(!view)return;
@@ -385,10 +389,10 @@ async function main() {
     view.setActive(display!=='hidden');
     if(display==='hidden')return;
 
-    const key=[scene,yaw.toFixed(4),spread.toFixed(4),scrollLinked?nextProgress.toFixed(4):'manual'].join('/');
+    const key=[scene,yaw.toFixed(4),spread.toFixed(4),turnWeight.toFixed(4),scrollLinked?nextProgress.toFixed(4):'manual'].join('/');
     if(key===poseKey)return;
     poseKey=key;
-    pendingPose={scene,yaw,tilt,spread,progress:nextProgress};
+    pendingPose={scene,yaw,tilt,spread,turnWeight,progress:nextProgress};
     view.invalidate();
   }
 
