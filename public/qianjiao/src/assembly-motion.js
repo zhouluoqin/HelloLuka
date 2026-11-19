@@ -10,16 +10,18 @@ const vec=a=>new THREE.Vector3(...a);
 export class AssemblyMotion {
   constructor(view) {
     this.view=view;this.data=view.data;this.follow=true;this.userPaused=false;this.activeStage=-1;
-    this.groups=new Map();this.actors=new Map();
+    this.actors=new Map();
     for(const mesh of view.meshes){
-      const {item,stage}=mesh.userData;this.actors.set(item.code+'-'+item.index,mesh);
-      if(!this.groups.has(stage))this.groups.set(stage,[]);this.groups.get(stage).push(mesh);
-      mesh.userData.assembledQuaternion=mesh.quaternion.clone();
-      mesh.userData.assembledScale=mesh.scale.clone();
-      if(['A3','A4'].includes(item.code))mesh.userData.entry.set(0,0,40);
-      const flat=this.flatMatrix(item);flat.decompose(mesh.userData.flatPosition=new THREE.Vector3(),mesh.userData.flatQuaternion=new THREE.Quaternion(),new THREE.Vector3());
+      const d=mesh.userData,item=d.item;
+      this.actors.set(item.code+'-'+item.index,mesh);
+      d.assembledQuaternion=mesh.quaternion.clone();
+      if(['A3','A4'].includes(item.code))d.entry.set(0,0,40);
+      d.insertOffset=d.entry.clone().normalize().multiplyScalar(22);
+      d.insertStart=d.base.clone().add(d.insertOffset);
+      [d.phaseStart,d.phaseEnd]=this.window(mesh);
+      const flat=this.flatMatrix(item);
+      flat.decompose(d.flatPosition=new THREE.Vector3(),d.flatQuaternion=new THREE.Quaternion(),new THREE.Vector3());
     }
-    for(const group of this.groups.values())group.sort((a,b)=>this.order(a)-this.order(b));
     this.trays=new THREE.Group();view.root.add(this.trays);
     const material=new THREE.MeshBasicMaterial({color:0xe7bac1,transparent:true,opacity:.28,side:THREE.DoubleSide,depthWrite:false});
     const lineMaterial=new THREE.LineBasicMaterial({color:0xc98998,transparent:true,opacity:.42});
@@ -33,9 +35,7 @@ export class AssemblyMotion {
     }
     this.guides=new THREE.Group();view.root.add(this.guides);
     this.lineMaterial=new THREE.LineBasicMaterial({color:0xb72e4b,transparent:true,opacity:.9,depthTest:false});
-    this.ringMaterial=new THREE.MeshBasicMaterial({color:0xd3415e,transparent:true,opacity:.65,depthTest:false});
-    view.controls.addEventListener('start',()=>{this.userPaused=true;});
-    view.camera.far=7000;view.camera.updateProjectionMatrix();view.controls.maxDistance=4500;view.controls.minDistance=55;
+    view.camera.far=7000;view.camera.updateProjectionMatrix();view.controls.maxDistance=6200;view.controls.minDistance=55;
     this.update(0);this.camera(1,true);
   }
 
@@ -52,14 +52,6 @@ export class AssemblyMotion {
     return new THREE.Matrix4().makeBasis(u,v,new THREE.Vector3(0,0,sign)).setPosition(x,y,-90);
   }
 
-  order(mesh) {
-    const {item,stage}=mesh.userData,c=item.code;
-    const rank={1:{A2:0,A4:1,K1:2},3:{S1:0,K2:1,A1:2,K1:3},4:{B1:0,B2:1,B3:2,K2:3},7:{S2:0,C1:1,C2:2,C3:3,K2:4},8:{C6:0,C4:1},9:{S3:0,C5:1,K2:2}}[stage]?.[c]??0;
-    // The front-facing copy demonstrates each joint; its siblings follow.
-    const front=item.index===6?0:item.index===1?1:item.index+1;
-    return rank*100+front;
-  }
-
   window(mesh) {
     const {item,stage}=mesh.userData,c=item.code,front=item.index===6||item.index===1&&['A2','A4','A1','S1','S2','S3','C5','B1','C1','D1'].includes(c);
     if(stage===1){if(c==='A2')return [0,.28];if(c==='A4')return front?[.24,.84]:[.48,.96];return [.78,1];}
@@ -72,27 +64,32 @@ export class AssemblyMotion {
   }
 
   phase(mesh,progress) {
-    const [start,end]=this.window(mesh);return clamp((progress-mesh.userData.stage+1-start)/(end-start),0,1);
+    const {stage,phaseStart,phaseEnd}=mesh.userData;
+    return clamp((progress-stage+1-phaseStart)/(phaseEnd-phaseStart),0,1);
   }
 
-  update(progress) {
+  update(progress,resetPositions=false) {
     this.progress=progress;
     this.trays.visible=progress<9.92&&!this.view.explosionTarget;
     const stage=progress===0?0:Math.min(10,Math.ceil(progress));
     if(stage!==this.activeStage){this.activeStage=stage;this.userPaused=false;this.buildGuides(stage);}
     let placed=0;
     for(const mesh of this.view.meshes){
-      const d=mesh.userData,t=this.phase(mesh,progress);d.motionPhase=t;
+      const d=mesh.userData,t=this.phase(mesh,progress);
       mesh.visible=true;
-      if(t===0){mesh.position.copy(d.flatPosition);mesh.quaternion.copy(d.flatQuaternion);}
-      else if(t===1){mesh.position.copy(d.base);mesh.quaternion.copy(d.assembledQuaternion);placed++;}
-      else if(t<.56){
-        const u=smooth(t/.56),entry=d.base.clone().add(d.entry.clone().normalize().multiplyScalar(22));
-        mesh.position.lerpVectors(d.flatPosition,entry,u);mesh.position.z+=Math.sin(Math.PI*u)*55;
-        mesh.quaternion.slerpQuaternions(d.flatQuaternion,d.assembledQuaternion,u);
-      }else{
-        const insert=smooth((t-.56)/.44);
-        mesh.position.copy(d.base).addScaledVector(d.entry.clone().normalize(),22*(1-insert));mesh.quaternion.copy(d.assembledQuaternion);
+      if(t===1)placed++;
+      if(resetPositions||t!==d.motionPhase) {
+        if(t===0){mesh.position.copy(d.flatPosition);mesh.quaternion.copy(d.flatQuaternion);}
+        else if(t===1){mesh.position.copy(d.base);mesh.quaternion.copy(d.assembledQuaternion);}
+        else if(t<.56){
+          const u=smooth(t/.56);
+          mesh.position.lerpVectors(d.flatPosition,d.insertStart,u);mesh.position.z+=Math.sin(Math.PI*u)*55;
+          mesh.quaternion.slerpQuaternions(d.flatQuaternion,d.assembledQuaternion,u);
+        }else{
+          const insert=smooth((t-.56)/.44);
+          mesh.position.copy(d.base).addScaledVector(d.insertOffset,1-insert);mesh.quaternion.copy(d.assembledQuaternion);
+        }
+        d.motionPhase=t;
       }
       const moving=t>0&&t<1;
       const selected=this.view.selected?.code===d.item.code&&this.view.selected?.index===d.item.index;
@@ -105,14 +102,21 @@ export class AssemblyMotion {
       const mates={1:[['A2',2]],2:[['A2',2]],3:[['A4',1]],4:[['B1',1]],5:[['B2',1],['B2',6],['B3',6]],6:[['B5',6]],7:[['C1',1]],8:[['C6',6]],9:[['S3',1]]}[stage]??[];
       for(const pair of mates){const mate=this.actors.get(pair.join('-'));if(mate&&mate.userData.motionPhase===1){mate.material=this.view.materials.selected;mate.userData.edge.material=this.view.selectedEdgeMaterial;mate.userData.edge.visible=true;}}
     }
-    this.view.element.dataset.placed=String(placed);this.view.element.dataset.visiblePieces=String(this.view.meshes.length);
+    if(placed!==this.placed){this.placed=placed;this.view.element.dataset.placed=String(placed);}
+    this.view.element.dataset.visiblePieces=String(this.view.meshes.length);
     this.view.cords.visible=progress>=9.98;
     if(this.view.lamp){
-      const t=smooth(clamp(progress-2,0,1));this.view.lamp.position.lerpVectors(new THREE.Vector3(575,-175,-72),new THREE.Vector3(0,0,53),t);this.view.lamp.rotation.y=(1-t)*Math.PI/2;this.view.setLamp(this.lampOverride??progress>=9.98);
+      const t=smooth(clamp(progress-2,0,1));this.view.lamp.position.set(575*(1-t),-175*(1-t),-72+125*t);this.view.lamp.rotation.y=(1-t)*Math.PI/2;this.view.setLamp(this.lampOverride??progress>=9.98);
     }
-    this.view.root.updateMatrixWorld(true);
     this.guides.visible=stage>0&&progress-stage+1>.25&&progress-stage+1<.92;
-    if(this.pathLine){const sample=this.exemplar(stage,progress-stage+1);if(sample){const d=sample.userData,p=this.guidePoint.clone(),q=p.clone().addScaledVector(d.entry.clone().normalize(),24);this.pathLine.geometry.setFromPoints([p,q]);this.pathLine.computeLineDistances();}}
+    if(this.guides.visible&&this.pathLine){
+      const sample=this.exemplar(stage,stagePhase);
+      if(sample&&sample!==this.guideActor){
+        this.guideActor=sample;
+        const p=this.guidePoint,q=p.clone().addScaledVector(sample.userData.insertOffset,24/22);
+        this.pathLine.geometry.setFromPoints([p,q]);this.pathLine.computeLineDistances();
+      }
+    }
   }
 
   exemplar(stage,phase) {
@@ -121,7 +125,9 @@ export class AssemblyMotion {
   }
 
   buildGuides(stage) {
-    for(const child of this.guides.children)child.geometry?.dispose();this.guides.clear();this.pathLine=null;
+    for(const child of this.guides.children)child.geometry?.dispose();
+    this.pathLine?.material.dispose();
+    this.guides.clear();this.pathLine=null;this.guideActor=null;
     if(!stage)return;
     const specs={1:['A2',2,[59,0,4.5],1],2:['A2',2,[43.1,-24.9,4.5],1],3:['A1',1,[59,0,100],1],4:['B1',1,[20.6,-35.7,119],1],5:['B4',6,[47.7,-27.5,133],2],6:['B4',6,[47.7,-27.5,133],2],7:['C1',1,[17.5,-30.3,158],1],8:['C4',6,[39.7,-22.9,171],2],9:['C5',1,[10,0,190],1],10:['D1',1,[95,0,108],1]}[stage];
     if(!specs)return;
@@ -137,7 +143,7 @@ export class AssemblyMotion {
   world(p){return new THREE.Vector3(p.x,p.z-85,-p.y);}
 
   camera(dt,immediate=false) {
-    if(!this.follow||this.userPaused)return;
+    if(!this.follow||this.userPaused)return false;
     const stage=this.activeStage,phase=this.progress-stage+1;
     let target,direction,distance;
     const aspect=this.view.camera.aspect||1;
@@ -149,7 +155,8 @@ export class AssemblyMotion {
       direction=new THREE.Vector3(.87,stage===6||stage===8?.83:.46,.8);
       distance=stage===5?165:stage===6?155:stage===8?145:180;
       if(d){
-        const movingCenter=sample.geometry.boundingSphere.center.clone().applyMatrix4(sample.matrixWorld);
+        const localCenter=sample.geometry.boundingSphere.center.clone().multiply(sample.scale).applyQuaternion(sample.quaternion).add(sample.position);
+        const movingCenter=this.world(localCenter);
         const local=d.motionPhase,blend=smooth(clamp((local-.42)/.32,0,1));target=movingCenter.lerp(joint,blend);
         const p=this.data.parts[d.item.code];distance=THREE.MathUtils.lerp(Math.max(p.width,p.height)*2.6+70,distance,blend);
         if(local<.35)direction.set(.2,1.4,1);
@@ -159,9 +166,15 @@ export class AssemblyMotion {
       // Portrait screens keep the current joint within the narrower horizontal field.
       if(aspect<1)distance/=Math.max(aspect,.55);
     }
-    direction.normalize();const position=target.clone().addScaledVector(direction,distance),alpha=immediate?1:1-Math.exp(-dt*4.2);
-    this.view.camera.position.lerp(position,alpha);this.view.controls.target.lerp(target,alpha);
-    this.view.element.dataset.cameraShot=stage===0?'flat-sheets':phase>.91?'assembled':'joint-'+stage;
+    const {camera,controls,element}=this.view;
+    distance=clamp(distance,controls.minDistance,controls.maxDistance);
+    const position=target.clone().addScaledVector(direction.normalize(),distance);
+    const settled=camera.position.distanceToSquared(position)<.01&&controls.target.distanceToSquared(target)<.01;
+    const alpha=immediate||settled?1:1-Math.exp(-dt*4.2);
+    camera.position.lerp(position,alpha);controls.target.lerp(target,alpha);
+    const shot=stage===0?'flat-sheets':phase>.91?'assembled':'joint-'+stage;
+    if(element.dataset.cameraShot!==shot)element.dataset.cameraShot=shot;
+    return !immediate&&!settled;
   }
 
   setFollow(active){this.follow=active;this.userPaused=false;}

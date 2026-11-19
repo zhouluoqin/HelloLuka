@@ -1,6 +1,6 @@
 import { RESEARCH, STEPS, PART_GROUPS, PART_ORDER, PART_DESCRIPTIONS, CONCEPTS, stageFor } from './content.js';
 import { partSvg } from './geometry.js';
-import { ObjectViewer } from './viewer.js';
+import { ObjectViewer } from './viewer.js?v=2';
 
 const $=selector=>document.querySelector(selector);
 const $$=selector=>[...document.querySelectorAll(selector)];
@@ -42,7 +42,10 @@ async function main(){
   const viewers=new Map();
   const ids={hero:'hero-canvas',product:'assembly-canvas',assembly:'assembly-canvas',bay:'bay-canvas',part:'part-canvas'};
   let selectedItem=null,partCode='A3',partInstance=1,progress=0,playing=false,hasPlayed=false,exploded=false,lastUi=0,currentStage=-1,stopAt=10;
-  let scrollLinked=!reducedMotion,scrollUpdatePending=false,lastScrollProgress=-1;
+  let scrollLinked=!reducedMotion,scrollUpdatePending=false,lastScrollProgress=-1,queuedProgress=null;
+  const heroSection=$('#top'),heroStage=heroSection.querySelector('.hero-stage');
+  const productSection=$('#product'),productStage=productSection.querySelector('.experience-sticky');
+  const lightButton=$('#product-light');
   const shortSteps=['叠好底框，柱脚对槽后直插','灯面竖起，下舌进入底框','先装撑片，再合上框','角脊与中肋，分别落入檐架','横梁两端落座，中间半搭接','双槽对准翘舌，沿瓦面直插','装好层间撑片，再搭上檐','先装横梁，再落上檐瓦','撑片对槽，收合顶冠','挂好长短挂片，点亮微光'];
 
   function showError(kind,message){const error=$('#'+kind+'-error');if(error){error.textContent=message||'当前环境无法启用 WebGL，已显示静态产品图。请用支持 WebGL 的浏览器查看交互模型';error.hidden=false;}const el=$('#'+ids[kind]);el.classList.add('failed');el.querySelector('.model-loading')?.remove();if(kind==='part'){el.innerHTML=partSvg(data.parts[partCode]);el.firstElementChild.style.cssText='width:100%;height:100%;fill:#edc6d2;stroke:#b77b90;stroke-width:.5';}}
@@ -56,47 +59,112 @@ async function main(){
         onError:message=>showError(kind,message),
       });
       viewers.set(kind,view);
-      if(kind==='assembly'){viewers.set('product',view);view.setProgress(progress);view.controls.enableZoom=!scrollLinked;view.renderer.domElement.style.touchAction=scrollLinked?'pan-y':'none';view.onFrame=dt=>{if(!playing)return;progress=Math.min(stopAt,progress+dt/6);view.setProgress(progress);lastUi+=dt;if(lastUi>.09||progress===stopAt){updateAssembly();lastUi=0;}if(progress===stopAt){playing=false;updatePlay();}};setRotateLabel(false);}
-      if(kind==='hero')view.onFrame=()=>{const section=$('#top'),travel=Math.max(1,section.offsetHeight-innerHeight),t=Math.max(0,Math.min(1,scrollY/travel));view.root.rotation.z=t*1.8;view.root.rotation.x=-Math.PI/2+t*.065;view.root.scale.setScalar(1+t*.13);view.element.dataset.scrollPose=t.toFixed(3);};
+      if(kind==='assembly'){
+        view.setScrollLinked(scrollLinked);
+        view.setProgress(progress);
+        view.onFrame=dt=>updateAssemblyFrame(view,dt);
+        setRotateLabel(false);
+        updateLightButton(view);
+      }
+      if(kind==='hero')updateHeroPose(view);
       return view;
     }catch(error){console.error('三维模型初始化失败：',kind,error);viewers.set(kind,null);showError(kind);return null;}
   }
-  const lazy=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){ensureViewer(entry.target.dataset.viewer);lazy.unobserve(entry.target);}},{rootMargin:'240px'});
+  const lazy=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){ensureViewer(entry.target.dataset.viewer);lazy.unobserve(entry.target);}});
   for(const kind of ['hero','assembly','bay']){const element=$('#'+ids[kind]);element.dataset.viewer=kind;lazy.observe(element);}
-  for(const kind of ['hero','product'])$('#'+kind+'-light').addEventListener('click',()=>{const view=ensureViewer(kind);if(!view)return;view.setLamp(!view.lampEnabled);if(view.motion)view.motion.lampOverride=view.lampEnabled;const b=$('#'+kind+'-light');b.setAttribute('aria-pressed',String(view.lampEnabled));b.setAttribute('aria-label',view.lampEnabled?'关闭红色微光':'开启红色微光');});
+  function updateLightButton(view){
+    const active=String(view.lampEnabled);
+    if(lightButton.getAttribute('aria-pressed')===active)return;
+    lightButton.setAttribute('aria-pressed',active);
+  }
+  lightButton.addEventListener('click',()=>{
+    const view=ensureViewer('assembly');
+    if(!view)return;
+    view.setLamp(!view.lampEnabled);
+    view.motion.lampOverride=view.lampEnabled;
+    updateLightButton(view);
+  });
 
   function setRotateLabel(active){$('#product-rotate').setAttribute('aria-pressed',String(active));$('#product-rotate').textContent=active?'暂停旋转':'自动旋转';}
   function selectProduct(item){selectedItem=item;$('#product-selection').hidden=false;$('#product-selection-label').textContent=`${item.code} · ${data.parts[item.code].name} / ${item.index}`;status(`已选中 ${item.code} ${data.parts[item.code].name}，第 ${item.index} 件`);}
-  $('#product-rotate').addEventListener('click',()=>{const view=ensureViewer('product');if(view){const active=!view.controls.autoRotate;manualMode();if(active){progress=10;view.setProgress(10);view.motion.reset();view.motion.setFollow(false);$('#assembly-follow').setAttribute('aria-pressed','false');updateAssembly();}view.setRotate(active);setRotateLabel(active);}});
+  $('#product-rotate').addEventListener('click',()=>{
+    const view=ensureViewer('product');
+    if(!view)return;
+    const active=!view.controls.autoRotate;
+    manualMode();
+    if(active){
+      playing=false;
+      updatePlay();
+      progress=10;
+      view.setProgress(10);
+      view.motion.reset();
+      view.motion.setFollow(false);
+      $('#assembly-follow').setAttribute('aria-pressed','false');
+      updateAssembly();
+    }
+    view.setRotate(active);
+    setRotateLabel(active);
+  });
   $('#product-xray').addEventListener('click',()=>{const view=ensureViewer('product');if(view){const active=!view.xray;view.setXray(active);$('#product-xray').setAttribute('aria-pressed',String(active));$('#product-state').textContent=active?'透视结构':'完整形态';}});
   $('#product-reset').addEventListener('click',()=>{ensureViewer('product')?.reset();status('已重置产品视角');});
   $('#product-zoom-in').addEventListener('click',()=>{manualMode();const view=ensureViewer('product');if(view){view.motion.userPaused=true;view.zoom(1.2);}});
   $('#product-zoom-out').addEventListener('click',()=>{manualMode();const view=ensureViewer('product');if(view){view.motion.userPaused=true;view.zoom(1/1.2);}});
   $('#product-fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('.product-viewer-wrap').requestFullscreen();}catch{status('当前浏览器不支持全屏，可使用模型缩放按钮');}});
-  document.addEventListener('fullscreenchange',()=>{const active=!!document.fullscreenElement;$('#product-fullscreen').setAttribute('aria-label',active?'退出全屏':'全屏查看三维模型');viewers.get('product')?.resize();});
-  $('#product-clear').addEventListener('click',()=>{selectedItem=null;viewers.get('product')?.clearSelection();$('#product-selection').hidden=true;});
+  document.addEventListener('fullscreenchange',()=>{const active=!!document.fullscreenElement;$('#product-fullscreen').setAttribute('aria-label',active?'退出全屏':'全屏查看三维模型');viewers.get('assembly')?.resize();});
+  $('#product-clear').addEventListener('click',()=>{selectedItem=null;viewers.get('assembly')?.clearSelection();$('#product-selection').hidden=true;});
   $('#product-inspect').addEventListener('click',()=>{if(selectedItem)openPart(selectedItem.code,selectedItem.index);});
 
   // The storyboard controls the same real instances as the assembled product.
   $('#assembly-steps').innerHTML=STEPS.map((step,i)=>`<button data-step="${i+1}" aria-label="第 ${i+1} 步：${step.title}"><span class="step-number">${String(i+1).padStart(2,'0')}</span><span>${step.short}</span></button>`).join('');
-  $$('#assembly-steps [data-step]').forEach(button=>button.addEventListener('click',()=>playStep(Number(button.dataset.step))));
+  const stepButtons=$$('#assembly-steps [data-step]');
+  const progressInput=$('#assembly-progress'),progressLabel=$('#assembly-progress-label'),assemblyCount=$('#assembly-count');
+  const previousStep=$('#assembly-prev'),nextStep=$('#assembly-next');
+  let completedStage=-1;
+  stepButtons.forEach(button=>button.addEventListener('click',()=>playStep(Number(button.dataset.step))));
   function updatePlay(){const b=$('#assembly-play');b.innerHTML=(playing?'暂停演示':'播放拼装')+`<span aria-hidden="true">${playing?'Ⅱ':'▷'}</span>`;b.setAttribute('aria-label',playing?'暂停自动拼装演示':progress>=10?'从头自动演示拼装':'播放自动拼装演示');b.setAttribute('aria-pressed',String(playing));}
   function updateAssembly(){
-    const active=Math.min(10,Math.ceil(progress));$('#assembly-progress').value=String(progress);$('#assembly-progress-label').textContent=`${active} / 10`;
-    $('#assembly-progress').setAttribute('aria-valuetext',active?`第 ${active} 步：${STEPS[active-1].title}`:'尚未开始');
-    const view=viewers.get('assembly');const count=view?.element.dataset.placed??data.scene.filter(i=>stageFor(i)<=Math.floor(progress)).length;
-    if(view)$('#product-light').setAttribute('aria-pressed',String(view.lampEnabled));
-    $('#assembly-count').textContent=progress===0?`${data.scene.length} 件 · 准备拼装`:`已就位 ${count} / ${data.scene.length} 件`;
-    if(!exploded)$('#assembly-mode-label').textContent=progress===0?'平铺板件':'插接演示';
-    $('#assembly-prev').disabled=progress<=0;$('#assembly-next').disabled=progress>=10;
-    for(const button of $$('#assembly-steps [data-step]')){const n=Number(button.dataset.step);button.classList.toggle('active',n===active);button.classList.toggle('completed',n<=Math.floor(progress));if(n===active)button.setAttribute('aria-current','step');else button.removeAttribute('aria-current');}
+    const active=Math.ceil(progress),completed=Math.floor(progress);
+    progressInput.value=String(progress);
+    const view=viewers.get('assembly');
+    const count=view?.element.dataset.placed??data.scene.filter(i=>stageFor(i)<=completed).length;
+    if(view)updateLightButton(view);
+    const countText=progress===0?`${data.scene.length} 件 · 准备拼装`:`已就位 ${count} / ${data.scene.length} 件`;
+    if(assemblyCount.textContent!==countText)assemblyCount.textContent=countText;
+    if(completed!==completedStage||active!==currentStage){
+      previousStep.disabled=progress<=0;nextStep.disabled=progress>=10;
+      for(const button of stepButtons){
+        const n=Number(button.dataset.step);
+        button.classList.toggle('active',n===active);
+        button.classList.toggle('completed',n<=completed);
+        if(n===active)button.setAttribute('aria-current','step');else button.removeAttribute('aria-current');
+      }
+      completedStage=completed;
+    }
     if(active===currentStage)return;currentStage=active;
+    progressLabel.textContent=`${active} / 10`;
+    progressInput.setAttribute('aria-valuetext',active?`第 ${active} 步：${STEPS[active-1].title}`:'尚未开始');
+    if(!exploded)$('#assembly-mode-label').textContent=progress===0?'平铺板件':'插接演示';
     const s=STEPS[active-1];$('#step-kicker').textContent=active?`步骤 ${String(active).padStart(2,'0')} / 10`:'准备开始';$('#step-title').textContent=s?.title??'从平板开始';$('#step-description').textContent=active?shortSteps[active-1]:'三张切割板，所有板件都已就位';$('#step-tip').textContent=s?.tip??'';
     $('#step-parts').innerHTML=(s?.codes??[]).map(code=>`<button data-open-part="${code}" aria-label="查看 ${code} ${data.parts[code].name}">${code} · ${data.parts[code].name}</button>`).join('');
     $$('[data-open-part]').forEach(b=>b.addEventListener('click',()=>openPart(b.dataset.openPart)));
   }
+  function updateAssemblyFrame(view,dt){
+    if(queuedProgress!==null){
+      progress=queuedProgress;
+      queuedProgress=null;
+      view.setProgress(progress);
+      updateAssembly();
+    }
+    if(!playing)return false;
+    progress=Math.min(stopAt,progress+dt/6);
+    view.setProgress(progress);
+    lastUi+=dt;
+    if(lastUi>.09||progress===stopAt){updateAssembly();lastUi=0;}
+    if(progress===stopAt){playing=false;updatePlay();}
+    return playing;
+  }
   function clearExplosion(){if(exploded){exploded=false;viewers.get('assembly')?.setExplosion(false);$('#assembly-explode').setAttribute('aria-pressed','false');$('#assembly-mode-label').textContent='分步拼装';}}
-  function manualMode(){scrollLinked=false;$('#assembly-scroll').setAttribute('aria-pressed','false');const view=viewers.get('assembly');if(view){view.controls.enableZoom=true;view.renderer.domElement.style.touchAction='none';}}
+  function manualMode(){scrollLinked=false;queuedProgress=null;$('#assembly-scroll').setAttribute('aria-pressed','false');viewers.get('assembly')?.setScrollLinked(false);}
   function stopSpin(view){if(view){view.setRotate(false);setRotateLabel(false);}}
   function jump(value){manualMode();playing=false;hasPlayed=true;clearExplosion();progress=Math.max(0,Math.min(10,value));const view=ensureViewer('assembly');view?.setProgress(progress);stopSpin(view);if(progress===0||progress===10)view?.motion.reset();updatePlay();updateAssembly();}
   function focusAssembly(){const stage=$('.assembly-stage'),r=stage.getBoundingClientRect();if(r.top<76||r.bottom>innerHeight-15)stage.scrollIntoView({block:'center',behavior:reducedMotion?'instant':'smooth'});}
@@ -107,23 +175,51 @@ async function main(){
   $('#assembly-next').addEventListener('click',()=>playStep(Math.min(10,Math.floor(progress)+1)));
   $('#assembly-complete').addEventListener('click',()=>jump(10));
   $('#assembly-reset').addEventListener('click',()=>ensureViewer('assembly')?.reset());
-  $('#assembly-follow').addEventListener('click',()=>{const view=ensureViewer('assembly');if(!view?.motion)return;view.motion.setFollow(!view.motion.follow);$('#assembly-follow').setAttribute('aria-pressed',String(view.motion.follow));});
+  $('#assembly-follow').addEventListener('click',()=>{const view=ensureViewer('assembly');if(!view?.motion)return;view.motion.setFollow(!view.motion.follow);$('#assembly-follow').setAttribute('aria-pressed',String(view.motion.follow));view.invalidate();});
   $('#assembly-explode').addEventListener('click',()=>{manualMode();playing=false;updatePlay();const view=ensureViewer('assembly');if(!view)return;stopSpin(view);exploded=!exploded;progress=10;view.setProgress(10);view.setExplosion(exploded);$('#assembly-explode').setAttribute('aria-pressed',String(exploded));$('#assembly-mode-label').textContent=exploded?'结构展开':'分步拼装';updateAssembly();});
   updateAssembly();updatePlay();
 
-  // A single pinned canvas serves both the product and its assembly story.
+  function updateHeroPose(view=viewers.get('hero')){
+    if(!view||!view.visible)return;
+    const travel=Math.max(1,heroSection.offsetHeight-heroStage.offsetHeight);
+    const value=reducedMotion?0:Math.min(1,Math.max(0,scrollY/travel));
+    view.setScrollPose(value);
+  }
+
+  // Scroll records the next pose; the viewer applies it at its own frame rate.
   function updateScrollExperience(){
-    scrollUpdatePending=false;if(!scrollLinked)return;
-    const section=$('#product'),rect=section.getBoundingClientRect();
-    if(rect.top>innerHeight+240)return;
-    const travel=Math.max(1,section.offsetHeight-(innerHeight-76));
-    const value=Math.max(0,Math.min(10,(scrollY-section.offsetTop+76)/travel*10));
-    if(Math.abs(value-lastScrollProgress)<.002)return;lastScrollProgress=value;
+    scrollUpdatePending=false;
+    updateHeroPose();
+    if(!scrollLinked)return;
+    const rect=productSection.getBoundingClientRect();
+    if(rect.top>=innerHeight||rect.bottom<=0)return;
+    const travel=Math.max(1,rect.height-productStage.offsetHeight);
+    const value=Math.max(0,Math.min(10,(76-rect.top)/travel*10));
+    if(value===lastScrollProgress||(value>0&&value<10&&Math.abs(value-lastScrollProgress)<.002))return;
     const view=ensureViewer('assembly');if(!view)return;
-    playing=false;clearExplosion();progress=value;stopSpin(view);view.setProgress(progress);view.element.dataset.scrollLinked='true';updatePlay();updateAssembly();
+    lastScrollProgress=value;
+    queuedProgress=value;
+    view.invalidate();
   }
   $('#assembly-scroll').setAttribute('aria-pressed',String(scrollLinked));
-  $('#assembly-scroll').addEventListener('click',()=>{scrollLinked=!scrollLinked;$('#assembly-scroll').setAttribute('aria-pressed',String(scrollLinked));const view=ensureViewer('assembly');if(view){view.controls.enableZoom=!scrollLinked;view.renderer.domElement.style.touchAction=scrollLinked?'pan-y':'none';if(scrollLinked){view.motion.setFollow(true);$('#assembly-follow').setAttribute('aria-pressed','true');}}if(scrollLinked){lastScrollProgress=-1;updateScrollExperience();}});
+  $('#assembly-scroll').addEventListener('click',()=>{
+    if(scrollLinked){manualMode();return;}
+    scrollLinked=true;
+    $('#assembly-scroll').setAttribute('aria-pressed','true');
+    const view=ensureViewer('assembly');
+    if(view){
+      view.setScrollLinked(true);
+      view.motion.setFollow(true);
+      $('#assembly-follow').setAttribute('aria-pressed','true');
+      playing=false;
+      clearExplosion();
+      stopSpin(view);
+      updatePlay();
+      view.invalidate();
+    }
+    lastScrollProgress=-1;
+    updateScrollExperience();
+  });
   addEventListener('scroll',()=>{if(!scrollUpdatePending){scrollUpdatePending=true;requestAnimationFrame(updateScrollExperience);}},{passive:true});
   addEventListener('resize',()=>{lastScrollProgress=-1;updateScrollExperience();});
   $('#experience-next').addEventListener('click',()=>{playing=false;updatePlay();$('#joinery').scrollIntoView({behavior:reducedMotion?'instant':'smooth'});});
@@ -151,7 +247,7 @@ async function main(){
     $('#part-instance').innerHTML=copies.map(item=>`<option value="${item.index}">${partCode} · 第 ${item.index} 件</option>`).join('');
     if(!copies.some(i=>i.index===partInstance))partInstance=copies[0].index;
     $('#part-instance').value=String(partInstance);$('#part-index').textContent=`${index+1} / ${PART_ORDER.length}`;updatePartPosition();
-    const view=ensureViewer('part');if(view){view.visible=true;view.setPart(partCode);}else showError('part');
+    const view=ensureViewer('part');if(view){view.visible=true;if(view.element.dataset.part!==partCode)view.setPart(partCode);else view.invalidate();}else showError('part');
   }
   function updatePartPosition(){const item=instances(partCode).find(i=>i.index===partInstance),module={body:'灯身',B:'下檐',C:'上檐',cap:'顶冠',drops:'挂片'}[item.module];$('#part-position').textContent=`${module}模块 · 实装第 ${partInstance} 件，可在整灯中定位`;}
   function openPart(code,index=1){partCode=code;partInstance=index;if(!partDialog.open)partDialog.showModal();populatePart();status('已打开 '+code+' '+data.parts[code].name+' 的独立模型');}

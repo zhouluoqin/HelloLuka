@@ -1,20 +1,65 @@
 import * as THREE from '../vendor/three.module.js';
 import { OrbitControls } from '../vendor/OrbitControls.js';
-import { RoomEnvironment } from '../vendor/RoomEnvironment.js';
 import { geometryFor, matrixFor } from './geometry.js';
 import { stageFor } from './content.js';
-import { AssemblyMotion } from './assembly-motion.js';
+import { AssemblyMotion } from './assembly-motion.js?v=2';
 
 const views=new Set(), edgeCache=new Map();
 const clamp=THREE.MathUtils.clamp;
 const ease=t=>1-(1-t)**3;
-let lastFrame=0;
-function tick(now) {
-  const dt=Math.min((now-lastFrame)/1000,2)||.016;lastFrame=now;
-  for(const view of views)if(view.visible&&!view.failed&&!document.hidden)view.frame(dt);
-  requestAnimationFrame(tick);
+const coarsePointer=matchMedia('(pointer: coarse)');
+let scheduledFrame=0;
+let studioReflection;
+
+function scheduleRender() {
+  if(!scheduledFrame&&!document.hidden)scheduledFrame=requestAnimationFrame(renderViews);
 }
-requestAnimationFrame(tick);
+
+function renderViews(now) {
+  let needsAnotherFrame=false;
+  for(const view of views) {
+    if(!view.visible||view.failed||(!view.dirty&&!view.animating)) {
+      view.lastFrame=null;
+      continue;
+    }
+    const elapsed=view.lastFrame===null?view.frameInterval:now-view.lastFrame;
+    if(elapsed+1>=view.frameInterval) {
+      view.lastFrame=now;
+      view.animating=view.frame(Math.min(elapsed/1000,.25));
+      view.dirty=false;
+    }
+    if(view.animating||view.dirty)needsAnotherFrame=true;
+    else view.lastFrame=null;
+  }
+  scheduledFrame=0;
+  if(needsAnotherFrame)scheduleRender();
+}
+
+document.addEventListener('visibilitychange',()=>{
+  for(const view of views) {
+    view.lastFrame=null;
+    if(!document.hidden)view.invalidate();
+  }
+});
+
+function reflectionMap() {
+  if(studioReflection)return studioReflection;
+  // A small reflection texture gives the acrylic soft highlights without a scene capture per viewer.
+  const image=document.createElement('canvas');
+  image.width=256;image.height=128;
+  const ctx=image.getContext('2d');
+  const gradient=ctx.createLinearGradient(0,0,0,image.height);
+  gradient.addColorStop(0,'#eee3e5');
+  gradient.addColorStop(.46,'#8b7880');
+  gradient.addColorStop(1,'#4d3742');
+  ctx.fillStyle=gradient;ctx.fillRect(0,0,image.width,image.height);
+  ctx.fillStyle='#fff6f2';ctx.fillRect(23,21,48,34);
+  ctx.fillStyle='#e9d6e0';ctx.fillRect(159,42,58,20);
+  studioReflection=new THREE.CanvasTexture(image);
+  studioReflection.mapping=THREE.EquirectangularReflectionMapping;
+  studioReflection.colorSpace=THREE.SRGBColorSpace;
+  return studioReflection;
+}
 
 function edgesFor(code,geometry) {
   if(!edgeCache.has(code))edgeCache.set(code,new THREE.EdgesGeometry(geometry,36));
@@ -25,10 +70,9 @@ export class ObjectViewer {
   constructor(element,data,{kind='product',onSelect=()=>{},onRotateChange=()=>{},onError=()=>{}}={}) {
     this.element=element;this.data=data;this.kind=kind;this.onSelect=onSelect;this.onRotateChange=onRotateChange;this.onError=onError;
     this.meshes=[];this.visible=true;this.failed=false;this.progress=0;this.explosion=0;this.explosionTarget=0;this.bay=0;this.xray=false;this.lampEnabled=true;
-    this.renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio,1.25));
+    this.dirty=true;this.animating=false;this.lastFrame=null;this.frameInterval=1000/(coarsePointer.matches?30:60);
+    this.renderer=new THREE.WebGLRenderer({antialias:!coarsePointer.matches,alpha:true,powerPreference:coarsePointer.matches?'low-power':'high-performance'});
     this.renderer.setClearColor(0x000000,0);
-    this.renderer.shadowMap.enabled=false;
     this.renderer.toneMapping=THREE.ACESFilmicToneMapping;this.renderer.toneMappingExposure=.91;
     this.renderer.outputColorSpace=THREE.SRGBColorSpace;
     const canvas=this.renderer.domElement;
@@ -36,19 +80,17 @@ export class ObjectViewer {
     this.scene=new THREE.Scene();
     this.camera=new THREE.PerspectiveCamera(kind==='part'?32:33,1,.3,2500);
     this.controls=new OrbitControls(this.camera,canvas);
-    if(kind==='hero'){this.controls.enableZoom=false;canvas.style.touchAction='pan-y';}
-    this.controls.enableDamping=true;this.controls.dampingFactor=.075;this.controls.enablePan=false;
+    // OrbitControls sets an inline touch-action; the viewport CSS owns gesture policy.
+    canvas.style.removeProperty('touch-action');
+    this.controls.enableZoom=kind!=='hero';
+    this.controls.enableDamping=true;this.controls.dampingFactor=coarsePointer.matches?.15:.1;this.controls.enablePan=false;
     this.controls.minDistance=12;this.controls.maxDistance=1450;this.controls.zoomSpeed=.8;
-    this.controls.autoRotate=['product','hero'].includes(kind)&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.controls.autoRotateSpeed=.55;
-    this.controls.addEventListener('start',()=>{if(this.controls.autoRotate){this.controls.autoRotate=false;this.onRotateChange(false);}});
+    this.controls.addEventListener('change',()=>this.invalidate());
     this.root=new THREE.Group();this.root.rotation.x=-Math.PI/2;this.root.position.y=-85;this.scene.add(this.root);
-    const pmrem=new THREE.PMREMGenerator(this.renderer), room=new RoomEnvironment();
-    this.environment=pmrem.fromScene(room,.025).texture;this.scene.environment=this.environment;
-    room.dispose();pmrem.dispose();
+    this.scene.environment=reflectionMap();
     const hemi=new THREE.HemisphereLight(0xffffff,0x78414e,.7);this.scene.add(hemi);
     const key=new THREE.DirectionalLight(0xfff7e9,1.7);key.position.set(150,280,270);this.scene.add(key);
-    key.castShadow=true;key.shadow.mapSize.set(1024,1024);Object.assign(key.shadow.camera,{left:-230,right:230,top:250,bottom:-230,near:1,far:900});key.shadow.normalBias=.18;key.shadow.bias=-.00004;
     const rim=new THREE.DirectionalLight(0xffe6ec,1.4);rim.position.set(-220,100,-150);this.scene.add(rim);
     const fill=new THREE.DirectionalLight(0xffffff,.5);fill.position.set(80,-90,200);this.scene.add(fill);
     this.makeMaterials();
@@ -67,40 +109,128 @@ export class ObjectViewer {
       if(kind==='bay')this.setBay(0,true);
     }
     this.resizeObserver=new ResizeObserver(()=>this.resize());this.resizeObserver.observe(element);
-    this.intersectionObserver=new IntersectionObserver(entries=>{this.visible=entries[0].isIntersecting;},{rootMargin:'100px'});this.intersectionObserver.observe(element);
-    this.raycaster=new THREE.Raycaster();this.pointer=new THREE.Vector2();this.down=null;
-    this.tooltip=document.createElement('span');this.tooltip.className='model-tooltip';this.tooltip.hidden=true;element.append(this.tooltip);
-    canvas.addEventListener('pointerdown',e=>{this.down={x:e.clientX,y:e.clientY};this.tooltip.hidden=true;});
-    canvas.addEventListener('pointerup',e=>{
-      if(this.kind==='hero')return;
-      if(!this.down||Math.hypot(e.clientX-this.down.x,e.clientY-this.down.y)>7)return;
-      const hit=this.hit(e);if(hit&&data.production_codes.includes(hit.userData.item.code)){this.select(hit.userData.item.code,hit.userData.item.index);this.onSelect(hit.userData.item);}
-      this.down=null;
+    this.intersectionObserver=new IntersectionObserver(([entry])=>{
+      this.visible=entry.isIntersecting;
+      this.lastFrame=null;
+      if(this.visible)this.invalidate();
     });
-    canvas.addEventListener('pointermove',e=>{
-      if(e.pointerType==='touch'||e.buttons){this.tooltip.hidden=true;return;}
-      const hit=this.hit(e);this.tooltip.hidden=!hit;
-      if(hit){const item=hit.userData.item;this.tooltip.textContent=`${item.code} · ${data.parts[item.code].name} / ${item.index}`;const rect=element.getBoundingClientRect();this.tooltip.style.left=Math.min(e.clientX-rect.left,rect.width-170)+'px';this.tooltip.style.top=e.clientY-rect.top+'px';}
-    });
-    canvas.addEventListener('pointerleave',()=>{this.tooltip.hidden=true;this.down=null;});
+    this.intersectionObserver.observe(element);
+    this.bindPointer(canvas);
     element.addEventListener('keydown',e=>this.onKey(e));
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.fail('三维显示暂时中断，可刷新页面重新加载。');});
-    element.classList.add('is-ready');element.dataset.modelReady='true';element.dataset.pieces=String(this.meshes.length);
-    views.add(this);this.resize();
+    element.dataset.pieces=String(this.meshes.length);
+    views.add(this);this.resize();this.invalidate();
+  }
+
+  invalidate() {
+    this.dirty=true;
+    if(this.visible&&!this.failed)scheduleRender();
+  }
+
+  setScrollPose(progress) {
+    if(progress===this.scrollPose)return;
+    this.scrollPose=progress;
+    this.root.rotation.z=progress*1.8;
+    this.root.rotation.x=-Math.PI/2+progress*.065;
+    this.root.scale.setScalar(1+progress*.13);
+    this.element.dataset.scrollPose=progress.toFixed(3);
+    this.invalidate();
+  }
+
+  setScrollLinked(active) {
+    this.controls.enableZoom=!active;
+    this.element.dataset.scrollLinked=String(active);
+  }
+
+  pauseForOrbit() {
+    if(this.motion)this.motion.userPaused=true;
+    if(this.controls.autoRotate){
+      this.setRotate(false);
+      this.onRotateChange(false);
+    }
+  }
+
+  bindPointer(canvas) {
+    const canSelect=this.kind==='assembly'||this.kind==='bay';
+    const hasTooltip=this.kind==='bay'||this.kind==='part';
+    let down=null,tooltip,lastHover=0;
+    if(canSelect||hasTooltip){
+      this.raycaster=new THREE.Raycaster();
+      this.pointer=new THREE.Vector2();
+    }
+    if(hasTooltip){
+      tooltip=document.createElement('span');
+      tooltip.className='model-tooltip';
+      tooltip.hidden=true;
+      this.element.append(tooltip);
+    }
+    canvas.addEventListener('pointerdown',event=>{
+      if(!event.isPrimary){
+        down=null;
+        if(this.controls.enableZoom)this.pauseForOrbit();
+        return;
+      }
+      down={x:event.clientX,y:event.clientY};
+      if(tooltip)tooltip.hidden=true;
+    });
+    canvas.addEventListener('pointermove',event=>{
+      if(down){
+        const dx=Math.abs(event.clientX-down.x),dy=Math.abs(event.clientY-down.y);
+        const singleTouchScroll=event.pointerType==='touch'&&!document.fullscreenElement?.contains(canvas);
+        if(singleTouchScroll&&(dx<8||dx<=dy)){
+          // Let the browser scroll; keep this gesture out of OrbitControls until it moves sideways.
+          event.stopImmediatePropagation();
+          return;
+        }
+        if(Math.hypot(dx,dy)>7){
+          down=null;
+          this.pauseForOrbit();
+        }
+      }
+      if(!tooltip||event.pointerType==='touch'||event.buttons||event.timeStamp-lastHover<60)return;
+      lastHover=event.timeStamp;
+      const hit=this.hit(event);
+      tooltip.hidden=!hit;
+      if(!hit)return;
+      const item=hit.userData.item,rect=this.element.getBoundingClientRect();
+      tooltip.textContent=`${item.code} · ${this.data.parts[item.code].name} / ${item.index}`;
+      tooltip.style.left=Math.max(0,Math.min(event.clientX-rect.left,rect.width-170))+'px';
+      tooltip.style.top=event.clientY-rect.top+'px';
+    },{capture:true,passive:true});
+    canvas.addEventListener('pointerup',event=>{
+      const isTap=down&&event.button===0&&Math.hypot(event.clientX-down.x,event.clientY-down.y)<=7;
+      down=null;
+      if(!canSelect||!isTap)return;
+      const hit=this.hit(event),item=hit?.userData.item;
+      if(item&&this.data.production_codes.includes(item.code)){
+        this.select(item.code,item.index);
+        this.onSelect(item);
+      }
+    });
+    const clearPointer=()=>{
+      down=null;
+      if(tooltip)tooltip.hidden=true;
+    };
+    canvas.addEventListener('pointercancel',clearPointer);
+    canvas.addEventListener('pointerleave',clearPointer);
+    canvas.addEventListener('wheel',()=>{
+      if(this.controls.enableZoom)this.pauseForOrbit();
+    },{capture:true,passive:true});
   }
 
   makeMaterials() {
-    const base={metalness:0,roughness:.13,transmission:.58,transparent:true,opacity:.68,depthWrite:false,vertexColors:true,forceSinglePass:true,thickness:3,attenuationColor:new THREE.Color(0xdc3d6b),attenuationDistance:65,ior:1.49,clearcoat:1,clearcoatRoughness:.12,side:THREE.DoubleSide,envMapIntensity:.85};
+    // Alpha blending keeps the red gradient and the light behind it without a second framebuffer pass.
+    const base={metalness:0,roughness:.22,transparent:true,opacity:.46,depthWrite:false,vertexColors:true,forceSinglePass:true,clearcoat:.72,clearcoatRoughness:.18,side:THREE.DoubleSide,envMapIntensity:.65};
     this.materials={
-      shell:new THREE.MeshPhysicalMaterial({...base,color:0xffffff}),
-      panel:new THREE.MeshPhysicalMaterial({...base,color:0xffffff,opacity:.56,roughness:.14}),
-      tile:new THREE.MeshPhysicalMaterial({...base,color:0xffffff,opacity:.65}),
-      rail:new THREE.MeshPhysicalMaterial({...base,color:0xffffff,opacity:.78,transmission:.4}),
-      key:new THREE.MeshPhysicalMaterial({...base,color:0xffffff,opacity:.76}),
-      trial:new THREE.MeshPhysicalMaterial({...base,color:0xfff1f6,opacity:.6}),
+      shell:new THREE.MeshPhysicalMaterial(base),
+      panel:new THREE.MeshPhysicalMaterial({...base,opacity:.38}),
+      tile:new THREE.MeshPhysicalMaterial({...base,opacity:.45}),
+      rail:new THREE.MeshPhysicalMaterial({...base,opacity:.62}),
+      key:new THREE.MeshPhysicalMaterial({...base,opacity:.56}),
+      trial:new THREE.MeshPhysicalMaterial({...base,color:0xfff1f6,opacity:.46}),
       xray:new THREE.MeshBasicMaterial({color:0xc9657d,transparent:true,opacity:.15,side:THREE.DoubleSide,depthWrite:false}),
-      selected:new THREE.MeshPhysicalMaterial({...base,color:0xb53d59,vertexColors:false,opacity:.9,transmission:.12,roughness:.2}),
-      moving:new THREE.MeshPhysicalMaterial({...base,color:0xdb688d,vertexColors:false,opacity:.8,transmission:.28,roughness:.17}),
+      selected:new THREE.MeshPhysicalMaterial({...base,color:0xb53d59,vertexColors:false,opacity:.87}),
+      moving:new THREE.MeshPhysicalMaterial({...base,color:0xdb688d,vertexColors:false,opacity:.69}),
     };
     this.edgeMaterial=new THREE.LineBasicMaterial({color:0x995266,transparent:true,opacity:.1});
     this.xrayEdgeMaterial=new THREE.LineBasicMaterial({color:0xc27087,transparent:true,opacity:.58,depthWrite:false});
@@ -161,19 +291,22 @@ export class ObjectViewer {
   }
 
   setLamp(active) {
+    if(this.lampEnabled===active&&this.element.dataset.lamp!==undefined)return;
     this.lampEnabled=active;
     if(this.innerLight){this.innerLight.visible=active;this.glow.visible=active;this.bulbMaterial.emissiveIntensity=active?1.3:0;}
     this.element.dataset.lamp=String(active);
+    this.invalidate();
   }
 
   setProgress(value) {
     this.progress=clamp(value,0,10);this.element.dataset.step=this.progress.toFixed(2);
     this.updateTransforms();
+    this.invalidate();
   }
 
-  updateTransforms() {
+  updateTransforms(resetPositions=false) {
     if(this.kind==='part')return;
-    if(this.kind==='assembly'&&!this.explosionTarget&&this.explosion<.001){this.motion?.update(this.progress);return;}
+    if(this.kind==='assembly'&&!this.explosionTarget&&this.explosion<.001){this.motion?.update(this.progress,resetPositions);return;}
     if(this.kind==='bay') {
       const tile=this.meshes.find(m=>m.userData.item.code==='B4'),rail=this.meshes.find(m=>m.userData.item.code==='B5');
       tile.visible=this.bay>0;tile.position.copy(tile.userData.base).addScaledVector(this.bayDirection,this.bayTileOffset||0);
@@ -197,8 +330,9 @@ export class ObjectViewer {
   setExplosion(active) {
     this.explosionTarget=active?1:0;
     if(active){this.motion?.trays&&(this.motion.trays.visible=false);this.motion?.guides&&(this.motion.guides.visible=false);this.motion?.update(10);this.progress=10;this.explosion=1;this.updateTransforms();this.fit();}
-    else {this.explosion=0;if(this.motion)this.motion.trays.visible=true;this.updateTransforms();this.motion?.reset();}
+    else {this.explosion=0;this.updateTransforms(true);this.motion?.reset();}
     this.element.dataset.exploded=String(active);
+    this.invalidate();
   }
 
   setXray(active) {this.xray=active;this.applyStyles();this.element.dataset.xray=String(active);}
@@ -206,6 +340,8 @@ export class ObjectViewer {
   clearSelection() {this.selected=null;this.applyStyles();delete this.element.dataset.selection;}
   applyStyles() {
     for(const mesh of this.meshes){const {item,edge,baseMaterial}=mesh.userData;const selected=this.selected?.code===item.code&&this.selected?.index===item.index;mesh.material=selected?this.materials.selected:this.xray?this.materials.xray:baseMaterial;edge.visible=!!(selected||this.xray||['bay','part'].includes(this.kind));edge.material=selected?this.selectedEdgeMaterial:this.xray?this.xrayEdgeMaterial:this.edgeMaterial;}
+    if(this.motion&&!this.explosionTarget)this.motion.update(this.progress);
+    this.invalidate();
   }
 
   setBay(step,immediate=false) {
@@ -213,7 +349,7 @@ export class ObjectViewer {
     this.bayDirection=new THREE.Vector3(...this.data.scene.find(i=>i.code==='B4'&&i.index===1).normal).negate();
     this.bayTileTarget=step===1?23:0;this.bayRailTarget=step===0?17:0;
     if(immediate){this.bayTileOffset=this.bayTileTarget;this.bayRailOffset=this.bayRailTarget;}
-    this.element.dataset.bay=String(step);this.updateTransforms();
+    this.element.dataset.bay=String(step);this.updateTransforms();this.invalidate();
   }
 
   setPart(code) {
@@ -223,6 +359,7 @@ export class ObjectViewer {
     const edge=new THREE.LineSegments(edgesFor(code,geometry),this.edgeMaterial);mesh.add(edge);
     mesh.userData={item:{code,index:1},base:mesh.position.clone(),baseMaterial:mesh.material,edge};this.meshes.push(mesh);this.root.add(mesh);
     this.root.updateMatrixWorld(true);this.resize();this.fit();this.element.dataset.part=code;
+    this.invalidate();
   }
 
   fit() {
@@ -240,6 +377,7 @@ export class ObjectViewer {
   }
 
   reset() {
+    this.invalidate();
     if(this.kind==='assembly'&&this.motion&&!this.explosionTarget){this.motion.reset();return;}
     if(this.kind==='assembly'&&this.explosionTarget){this.explosion=0;this.updateTransforms();this.fit();return;}
     if(this.savedCamera){this.camera.position.copy(this.savedCamera);this.controls.target.copy(this.savedTarget);this.controls.update();}
@@ -249,14 +387,31 @@ export class ObjectViewer {
     const vector=this.camera.position.clone().sub(this.controls.target),distance=clamp(vector.length()/factor,this.controls.minDistance,this.controls.maxDistance);
     this.camera.position.copy(this.controls.target).add(vector.setLength(distance));this.controls.update();
     this.element.dataset.zoom=this.camera.position.distanceTo(this.controls.target).toFixed(1);
+    this.invalidate();
   }
 
-  setRotate(active) {this.controls.autoRotate=active;this.element.dataset.rotating=String(active);}
+  setRotate(active) {
+    if(this.controls.autoRotate===active)return;
+    this.controls.autoRotate=active;
+    this.element.dataset.rotating=String(active);
+    this.invalidate();
+  }
+
   resize() {
-    const {width,height}=this.element.getBoundingClientRect();if(width<1||height<1)return;
-    const old=this.camera.aspect;this.camera.aspect=width/height;this.camera.updateProjectionMatrix();this.renderer.setSize(width,height,false);
+    const width=this.element.clientWidth,height=this.element.clientHeight;
+    if(width<1||height<1)return;
+    const touchDevice=coarsePointer.matches;
+    const pixelBudget=touchDevice?360000:1350000;
+    const pixelRatio=Math.min(devicePixelRatio,touchDevice?1:1.25,Math.sqrt(pixelBudget/(width*height)));
+    if(width===this.width&&height===this.height&&pixelRatio===this.pixelRatio)return;
+    this.width=width;this.height=height;this.pixelRatio=pixelRatio;
+    this.frameInterval=1000/(touchDevice?30:60);
+    const old=this.camera.aspect;
+    this.camera.aspect=width/height;this.camera.updateProjectionMatrix();
+    this.renderer.setDrawingBufferSize(width,height,pixelRatio);
     if(this.kind==='assembly')this.camera.setViewOffset(width,height,0,Math.min(75,height*.08),width,height);
-    if(this.savedCamera&&Math.abs(old-this.camera.aspect)>.35)this.fit();
+    if(this.savedCamera&&(this.kind!=='assembly'||this.explosionTarget)&&Math.abs(old-this.camera.aspect)>.35)this.fit();
+    this.invalidate();
   }
 
   hit(event) {
@@ -267,8 +422,7 @@ export class ObjectViewer {
 
   onKey(e) {
     if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-','0'].includes(e.key))return;
-    e.preventDefault();this.controls.autoRotate=false;this.onRotateChange(false);
-    if(this.motion)this.motion.userPaused=true;
+    e.preventDefault();this.pauseForOrbit();
     if(e.key==='+'||e.key==='=')return this.zoom(1.13);
     if(e.key==='-')return this.zoom(1/1.13);
     if(e.key==='0')return this.reset();
@@ -279,15 +433,27 @@ export class ObjectViewer {
     if(e.key==='ArrowDown')spherical.phi=clamp(spherical.phi+.13,.12,Math.PI-.12);
     this.camera.position.copy(this.controls.target).add(new THREE.Vector3().setFromSpherical(spherical));this.controls.update();
     this.element.dataset.orbit=`${spherical.theta.toFixed(2)},${spherical.phi.toFixed(2)}`;
+    this.invalidate();
   }
 
   frame(dt) {
-    this.onFrame?.(dt);
-    if(Math.abs(this.explosion-this.explosionTarget)>.0001){this.explosion=THREE.MathUtils.damp(this.explosion,this.explosionTarget,5,dt);this.updateTransforms();}
-    if(this.kind==='bay'){this.bayTileOffset=THREE.MathUtils.damp(this.bayTileOffset||0,this.bayTileTarget,5,dt);this.bayRailOffset=THREE.MathUtils.damp(this.bayRailOffset||0,this.bayRailTarget,5,dt);this.updateTransforms();}
-    if(this.motion&&!this.explosionTarget)this.motion.camera(dt);
-    if(this.innerLight&&this.lampEnabled)this.innerLight.intensity=2400*(1+Math.sin(performance.now()*.0014)*.025);
-    this.controls.update(dt);this.renderer.render(this.scene,this.camera);
+    const playing=this.onFrame?.(dt);
+    let movingBay=false;
+    if(this.kind==='bay'){
+      movingBay=Math.abs(this.bayTileOffset-this.bayTileTarget)>.05||Math.abs(this.bayRailOffset-this.bayRailTarget)>.05;
+      this.bayTileOffset=movingBay?THREE.MathUtils.damp(this.bayTileOffset,this.bayTileTarget,5,dt):this.bayTileTarget;
+      this.bayRailOffset=movingBay?THREE.MathUtils.damp(this.bayRailOffset,this.bayRailTarget,5,dt):this.bayRailTarget;
+      this.updateTransforms();
+    }
+    const following=this.motion&&!this.explosionTarget&&this.motion.camera(dt);
+    const rotating=this.controls.update(dt);
+    this.renderer.render(this.scene,this.camera);
+    if(!this.ready){
+      this.ready=true;
+      this.element.classList.add('is-ready');
+      this.element.dataset.modelReady='true';
+    }
+    return !!(playing||movingBay||following||rotating||this.controls.autoRotate);
   }
 
   fail(message) {
