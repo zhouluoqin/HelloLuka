@@ -85,7 +85,7 @@ function App() {
       <div className="frame hero-frame">
         <div className="topbar">
           <a className="wordmark" href="#top">HelloLuka<span>.</span></a>
-          <nav aria-label="主导航"><a href="#about">关于</a><a href="#work">作品</a><a href="#skills">能力</a></nav>
+          <nav aria-label="主导航"><a href="#about">关于</a><a href="#work">作品</a><a href="./qianjiao/">千角灯</a><a href="#skills">能力</a></nav>
           <a className="button outline" href="#contact">联系我 <span aria-hidden="true">↗</span></a>
         </div>
         <div className="hero-content">
@@ -106,16 +106,17 @@ function App() {
             <h3>你好，我是 Luka。</h3>
             <p>我是一名跨领域设计师，在视觉、AI、品牌与工业设计之间工作。我关注一个概念如何从屏幕上的图像，走向一致的品牌体验，或者成为可以触摸的物件。</p>
             <a className="text-link" href={profile.email ? 'mailto:' + profile.email : '#contact'}>{profile.email || '联系信息'} <span aria-hidden="true">↗</span></a>
-            <dl className="stats"><div><dt>设计方向</dt><dd>04</dd></div><div><dt>示例项目</dt><dd>{String(projects.length).padStart(2, '0')}</dd></div></dl>
+            <dl className="stats"><div><dt>设计方向</dt><dd>04</dd></div><div><dt>精选项目</dt><dd>{String(projects.length).padStart(2, '0')}</dd></div></dl>
           </div>
         </div>
       </section>
       <section id="work" className="frame section">
         <Heading index="02" label="SELECTED WORK">精选项目</Heading>
         <div className="project-grid">{projects.map((project, index) => <article className="project" key={project.title}>
-          <img src={project.image} alt={project.alt} loading="lazy" />
-          <div className="project-meta"><div><p className="mono">{project.category} · 概念示例</p><h3>{project.title}</h3></div><span className="mono">0{index + 1}</span></div>
+          {project.href ? <a className="project-cover" href={project.href} aria-label={project.linkLabel}><img src={project.image} alt={project.alt} loading="lazy" /></a> : <img src={project.image} alt={project.alt} loading="lazy" />}
+          <div className="project-meta"><div><p className="mono">{project.category} · {project.status || '概念示例'}</p><h3>{project.title}</h3></div><span className="mono">0{index + 1}</span></div>
           <p className="project-desc">{project.description}</p>
+          {project.href && <a className="text-link project-link" href={project.href}>{project.linkLabel}</a>}
         </article>)}</div>
       </section>
       <section id="skills" className="frame section">
